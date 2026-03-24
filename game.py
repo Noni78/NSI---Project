@@ -1621,9 +1621,7 @@ class Game:
         self.wave_killed = min(self.wave_total, self.wave_killed + 1)
         self.drop_pickup(enemy.x, enemy.y)
         self.spawn_gems(enemy.x, enemy.y, count=random.randint(1, 3), amount=1)
-        if self.player.ultimate_beam_time > 0:
-            self.player.ultimate_beam_time = min(10.0, self.player.ultimate_beam_time + 0.1)
-        else:
+        if self.player.ultimate_beam_time <= 0:
             self.player.ultimate_charge = min(
                 self.player.ultimate_max, self.player.ultimate_charge + 1
             )
@@ -1658,7 +1656,7 @@ class Game:
         if self.player.ultimate_beam_time > 0:
             return False
         self.player.ultimate_charge = 0
-        self.player.ultimate_beam_time = 6.0
+        self.player.ultimate_beam_time = 15.0
         radius = 220
         self.ultimate_pulses.append(UltimatePulse(self.player.x, self.player.y, radius))
         for enemy in list(self.enemies):
@@ -1679,37 +1677,54 @@ class Game:
             return
         self.player.fire_timer = 0.18 if self.player.haste > 0 else 0.22
         sx, sy = self.player.x, self.player.y
-        ex, ey = target_pos
-        self.ultimate_beams.append(UltimateBeam((sx, sy), (ex, ey)))
+        base_angle = math.atan2(target_pos[1] - sy, target_pos[0] - sx)
+        level = max(0, int((self.player.bullets_per_shot - 1) / 2))
+        pickup_bonus = 1 if self.player.multishot > 0 else 0
+        beams = clamp(1 + level + pickup_bonus, 1, 12)
+        max_spread = 0.35 + (beams / 80) * 0.95
+        if beams == 1:
+            offsets = [0.0]
+        else:
+            step = (2 * max_spread) / (beams - 1)
+            offsets = [(-max_spread + i * step) for i in range(beams)]
+
+        base_dist = math.hypot(target_pos[0] - sx, target_pos[1] - sy) or 1.0
         beam_width = 8
-        dx = ex - sx
-        dy = ey - sy
-        seg_len = math.hypot(dx, dy) or 1.0
-        dir_x = dx / seg_len
-        dir_y = dy / seg_len
-        best_proj = None
-        impact_pos = None
 
-        def consider_target(tx, ty, radius):
-            nonlocal best_proj, impact_pos
-            vx = tx - sx
-            vy = ty - sy
-            proj = vx * dir_x + vy * dir_y
-            if proj < 0 or proj > seg_len:
-                return
-            perp = abs(vx * dir_y - vy * dir_x)
-            if perp <= radius + beam_width:
-                if best_proj is None or proj < best_proj:
-                    best_proj = proj
-                    impact_pos = (tx, ty)
+        for offset in offsets:
+            ang = base_angle + offset
+            ex = sx + math.cos(ang) * base_dist
+            ey = sy + math.sin(ang) * base_dist
+            self.ultimate_beams.append(UltimateBeam((sx, sy), (ex, ey)))
 
-        for enemy in self.enemies:
-            consider_target(enemy.x, enemy.y, enemy.radius)
-        if self.boss is not None:
-            consider_target(self.boss.x, self.boss.y, self.boss.radius)
+            dx = ex - sx
+            dy = ey - sy
+            seg_len = math.hypot(dx, dy) or 1.0
+            dir_x = dx / seg_len
+            dir_y = dy / seg_len
+            best_proj = None
+            impact_pos = None
 
-        if impact_pos is not None:
-            self.ultimate_zones.append(UltimateZone(impact_pos[0], impact_pos[1]))
+            def consider_target(tx, ty, radius):
+                nonlocal best_proj, impact_pos
+                vx = tx - sx
+                vy = ty - sy
+                proj = vx * dir_x + vy * dir_y
+                if proj < 0 or proj > seg_len:
+                    return
+                perp = abs(vx * dir_y - vy * dir_x)
+                if perp <= radius + beam_width:
+                    if best_proj is None or proj < best_proj:
+                        best_proj = proj
+                        impact_pos = (tx, ty)
+
+            for enemy in self.enemies:
+                consider_target(enemy.x, enemy.y, enemy.radius)
+            if self.boss is not None:
+                consider_target(self.boss.x, self.boss.y, self.boss.radius)
+
+            if impact_pos is not None:
+                self.ultimate_zones.append(UltimateZone(impact_pos[0], impact_pos[1]))
 
     def handle_collisions(self):
         for proj in list(self.projectiles):
