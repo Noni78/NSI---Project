@@ -352,19 +352,19 @@ class Enemy:
         if kind == "fast":
             self.speed *= 3.0
             self.target_height = int(HEIGHT * 0.05)
-            self.max_hp = 16 + wave * 3
+            self.max_hp = 16 + wave * 5
         elif kind == "tank":
             self.speed *= 0.65
             self.target_height = int(HEIGHT * 0.12)
-            self.max_hp = 80 + wave * 10
+            self.max_hp = 80 + wave * 16
             self.beam_timer = 2.0
         elif kind == "shooter":
             self.speed *= 0.9
             self.target_height = int(HEIGHT * 0.065)
-            self.max_hp = 24 + wave * 4
+            self.max_hp = 24 + wave * 7
             self.shoot_cooldown = random.uniform(0.2, 0.8)
         else:
-            self.max_hp = 20 + wave * 3
+            self.max_hp = 20 + wave * 5
 
         self.sprite = self.load_sprite()
         if self.sprite:
@@ -373,6 +373,7 @@ class Enemy:
         self.hp = self.max_hp
         self.burn_timer = 0.0
         self.burn_dps = 0.0
+        self.fire_orb_hit_cd = 0.0
 
     def load_sprite(self):
         if self.kind == "basic":
@@ -414,6 +415,7 @@ class Enemy:
         if self.burn_timer > 0:
             self.burn_timer -= dt
             self.hp -= self.burn_dps * dt
+        self.fire_orb_hit_cd = max(0.0, self.fire_orb_hit_cd - dt)
 
         if self.kind == "tank":
             if self.beam_active > 0:
@@ -539,7 +541,7 @@ class Boss:
         self.x = WIDTH / 2
         self.y = HEIGHT * 0.18
         base_hp = 80 + wave * 8
-        self.max_hp = base_hp * 17.5
+        self.max_hp = base_hp * 17.5 * 4
         self.hp = self.max_hp
         self.radius = 42
         self.speed = 70 * 0.65
@@ -557,6 +559,7 @@ class Boss:
         self.zone_timer = 0.0
         self.burn_timer = 0.0
         self.burn_dps = 0.0
+        self.fire_orb_hit_cd = 0.0
 
     def phase(self):
         ratio = max(0.0, min(1.0, self.hp / self.max_hp))
@@ -566,6 +569,7 @@ class Boss:
         if self.burn_timer > 0:
             self.burn_timer -= dt
             self.hp -= self.burn_dps * dt
+        self.fire_orb_hit_cd = max(0.0, self.fire_orb_hit_cd - dt)
         if self.spawn_delay > 0:
             self.spawn_delay = max(0.0, self.spawn_delay - dt)
             return
@@ -701,6 +705,8 @@ class Player:
         self.haste = 0.0
         self.heal_boost = 0.0
         self.hurt_timer = 0.0
+        self.shield_hit_timer = 0.0
+        self.hurt_fx_timer = 0.0
         self.sprite_base = self.load_sprite()
         self.shield_sprite = self.load_shield_sprite()
         self.aim_angle = 0.0
@@ -798,6 +804,8 @@ class Player:
         self.haste = max(0.0, self.haste - dt)
         self.heal_boost = max(0.0, self.heal_boost - dt)
         self.hurt_timer = max(0.0, self.hurt_timer - dt)
+        self.shield_hit_timer = max(0.0, self.shield_hit_timer - dt)
+        self.hurt_fx_timer = max(0.0, self.hurt_fx_timer - dt)
         heal_mult = 5.0 if self.heal_boost > 0 else 1.0
         self.hp = min(self.max_hp, self.hp + self.max_hp * 0.01 * heal_mult * dt)
         if self.laser_orb_beam_timer > 0:
@@ -892,12 +900,15 @@ class Player:
 
     def take_damage(self, amount):
         if self.invincible > 0 or self.hurt_timer > 0:
-            return
+            return "none"
         if self.shield > 0:
             self.shield = max(0, self.shield - amount * 0.08)
-            return
+            self.shield_hit_timer = 0.14
+            return "shield"
         self.hp -= amount
         self.hurt_timer = 0.6
+        self.hurt_fx_timer = 0.16
+        return "hp"
 
     def draw(self, screen):
         for orb in self.fire_orbiters:
@@ -922,12 +933,30 @@ class Player:
                 pygame.draw.circle(
                     screen, PURPLE, (int(self.x), int(self.y)), self.radius + 6, 2
                 )
+            if self.shield_hit_timer > 0:
+                ratio = self.shield_hit_timer / 0.14
+                pulse_r = int(self.radius + 6 + (1.0 - ratio) * 8)
+                alpha = int(95 * ratio)
+                surf = pygame.Surface((pulse_r * 2 + 8, pulse_r * 2 + 8), pygame.SRCALPHA)
+                center = (surf.get_width() // 2, surf.get_height() // 2)
+                pygame.draw.circle(surf, (170, 145, 255, max(12, int(alpha * 0.22))), center, pulse_r)
+                pygame.draw.circle(surf, (220, 200, 255, alpha), center, pulse_r, 2)
+                screen.blit(surf, (int(self.x - center[0]), int(self.y - center[1])))
         if self.sprite_base:
             rotated = pygame.transform.rotate(self.sprite_base, -math.degrees(self.aim_angle))
             rect = rotated.get_rect(center=(int(self.x), int(self.y)))
             screen.blit(rotated, rect.topleft)
         else:
             pygame.draw.circle(screen, self.color, (int(self.x), int(self.y)), self.radius)
+        if self.hurt_fx_timer > 0:
+            ratio = self.hurt_fx_timer / 0.16
+            pulse_r = int(self.radius + 4 + (1.0 - ratio) * 8)
+            alpha = int(90 * ratio)
+            surf = pygame.Surface((pulse_r * 2 + 8, pulse_r * 2 + 8), pygame.SRCALPHA)
+            center = (surf.get_width() // 2, surf.get_height() // 2)
+            pygame.draw.circle(surf, (255, 95, 95, max(8, int(alpha * 0.18))), center, pulse_r)
+            pygame.draw.circle(surf, (255, 130, 130, alpha), center, pulse_r, 2)
+            screen.blit(surf, (int(self.x - center[0]), int(self.y - center[1])))
 
     def draw_fire_ring(self, screen):
         ring_radius = int(self.fire_ring_radius)
@@ -1317,6 +1346,55 @@ class DamageNumber:
         self.time_left -= dt
         self.y -= self.float_speed * dt
 
+
+class PulseEffect:
+    def __init__(
+        self,
+        x,
+        y,
+        color=(255, 120, 90),
+        start_radius=12,
+        end_radius=80,
+        duration=0.3,
+        width=4,
+        fill_alpha=60,
+    ):
+        self.x = x
+        self.y = y
+        self.color = color
+        self.start_radius = start_radius
+        self.end_radius = end_radius
+        self.duration = duration
+        self.time_left = duration
+        self.width = width
+        self.fill_alpha = fill_alpha
+
+    def update(self, dt):
+        self.time_left -= dt
+
+    def draw(self, screen):
+        if self.time_left <= 0:
+            return
+        t = 1.0 - (self.time_left / self.duration)
+        radius = int(self.start_radius + (self.end_radius - self.start_radius) * t)
+        alpha = int(220 * (1.0 - t))
+        surf = pygame.Surface((radius * 2 + 8, radius * 2 + 8), pygame.SRCALPHA)
+        center = (surf.get_width() // 2, surf.get_height() // 2)
+        pygame.draw.circle(
+            surf,
+            (self.color[0], self.color[1], self.color[2], int(min(alpha, self.fill_alpha))),
+            center,
+            radius,
+        )
+        pygame.draw.circle(
+            surf,
+            (self.color[0], self.color[1], self.color[2], alpha),
+            center,
+            radius,
+            self.width,
+        )
+        screen.blit(surf, (int(self.x - center[0]), int(self.y - center[1])))
+
 @dataclass
 class UpgradeChoice:
     key: str
@@ -1337,11 +1415,8 @@ UPGRADE_POOL = [
 
 EPIC_UPGRADES = [
     UpgradeChoice("laser_orb", "Orbe laser", "Une orbe tire des lasers bleus."),
-    UpgradeChoice("electroelf", "Electroelf", "Familier qui lance des eclairs AOE."),
-    UpgradeChoice(
-        "fire_ring",
-        "EVO: Cercle de feu+",
-        "Debloque puis renforce le cercle de feu.",
+    UpgradeChoice("electroelf", "Electroelf", "Familier qui lance des eclairs."),
+    UpgradeChoice("fire_ring","EVO: Cercle de feu+","Debloque le cercle de feu",
     ),
 ]
 
@@ -1376,6 +1451,7 @@ class Game:
         self.pickups = []
         self.gems = []
         self.damage_numbers = []
+        self.pulse_effects = []
         self.wave = 1
         self.state = "playing"
         self.score = 0
@@ -1431,6 +1507,8 @@ class Game:
             return 5
         if key == "rockets":
             return 19
+        if key == "fire_ring":
+            return 10
         return None
 
     def upgrade_is_maxed(self, key):
@@ -1483,6 +1561,7 @@ class Game:
         self.pickups.clear()
         self.gems.clear()
         self.damage_numbers.clear()
+        self.pulse_effects.clear()
         self.wave = 1
         self.score = 0
         self.upgrade_choices = []
@@ -1554,7 +1633,7 @@ class Game:
             x, y = random_spawn_point()
             kind = random.choices(
                 ["basic", "fast", "tank", "shooter"],
-                weights=[50, 50 / 3, 50 / 3, 50 / 3],
+                weights=[70, 10, 10, 10],
             )[0]
             self.enemies.append(Enemy(x, y, kind, wave))
         if wave % 5 == 0:
@@ -1607,13 +1686,17 @@ class Game:
         elif key == "fire_ring":
             if not self.player.fire_ring:
                 self.player.fire_ring = True
-                self.player.fire_ring_level = 1
+                self.player.fire_ring_level = 0
+                self.player.fire_orbiters.clear()
             else:
+                if self.player.fire_ring_level >= 10:
+                    return
                 self.player.fire_ring_level += 1
                 self.player.fire_ring_radius = min(220.0, self.player.fire_ring_radius + 8.0)
                 self.player.fire_ring_burn_dps += 3.0
-            self.player.fire_orbiters = self.player.fire_orbiters[:10]
-            while len(self.player.fire_orbiters) < 10:
+            desired_orbs = min(10, self.player.fire_ring_level)
+            self.player.fire_orbiters = self.player.fire_orbiters[:desired_orbs]
+            while len(self.player.fire_orbiters) < desired_orbs:
                 self.player.fire_orbiters.append(FireOrbiter(0.0))
             self.player.sync_orbiters()
         elif key == "rockets":
@@ -1736,6 +1819,17 @@ class Game:
     def on_enemy_killed(self, enemy):
         self.score += 1
         self.wave_killed = min(self.wave_total, self.wave_killed + 1)
+        self.spawn_pulse(
+            enemy.x,
+            enemy.y,
+            color=(255, 190, 110),
+            start_radius=12,
+            end_radius=44,
+            duration=0.2,
+            width=3,
+            fill_alpha=36,
+        )
+        self.explosions.append(Explosion(enemy.x, enemy.y, max(18, int(enemy.radius + 8)), duration=0.2))
         self.drop_pickup(enemy.x, enemy.y)
         self.spawn_gems(enemy.x, enemy.y, count=random.randint(1, 3), amount=1)
         if self.player.ultimate_beam_time <= 0:
@@ -1778,11 +1872,62 @@ class Game:
             return
         self.damage_numbers.append(DamageNumber(x, y, amount, color=color))
 
+    def spawn_pulse(
+        self,
+        x,
+        y,
+        color=(255, 130, 90),
+        start_radius=10,
+        end_radius=32,
+        duration=0.12,
+        width=2,
+        fill_alpha=28,
+    ):
+        self.pulse_effects.append(
+            PulseEffect(
+                x,
+                y,
+                color=color,
+                start_radius=start_radius,
+                end_radius=end_radius,
+                duration=duration,
+                width=width,
+                fill_alpha=fill_alpha,
+            )
+        )
+
+    def damage_player(self, amount):
+        result = self.player.take_damage(amount)
+        if result == "shield":
+            self.spawn_pulse(
+                self.player.x,
+                self.player.y,
+                color=(180, 150, 255),
+                start_radius=self.player.radius + 6,
+                end_radius=self.player.radius + 20,
+                duration=0.12,
+                width=2,
+                fill_alpha=18,
+            )
+        elif result == "hp":
+            self.spawn_pulse(
+                self.player.x,
+                self.player.y,
+                color=(255, 105, 105),
+                start_radius=self.player.radius + 4,
+                end_radius=self.player.radius + 16,
+                duration=0.12,
+                width=2,
+                fill_alpha=16,
+            )
+        return result
+
     def damage_enemy(self, enemy, amount):
         if enemy not in self.enemies or amount <= 0 or enemy.hp <= 0:
             return
         enemy.hp -= amount
         self.spawn_damage_number(enemy.x, enemy.y, amount)
+        self.spawn_pulse(enemy.x, enemy.y, color=(255, 150, 95), start_radius=8, end_radius=24, duration=0.11, width=2, fill_alpha=24)
         if enemy.hp <= 0 and enemy in self.enemies:
             self.enemies.remove(enemy)
             self.on_enemy_killed(enemy)
@@ -1898,27 +2043,37 @@ class Game:
                         self.projectiles.remove(proj)
             else:
                 if distance((proj.x, proj.y), (self.player.x, self.player.y)) < proj.radius + self.player.radius:
-                    self.player.take_damage(10)
+                    self.damage_player(10)
                     if proj in self.projectiles:
                         self.projectiles.remove(proj)
 
         for enemy in self.enemies:
             if distance((enemy.x, enemy.y), (self.player.x, self.player.y)) < enemy.radius + self.player.radius:
-                self.player.take_damage(14 + self.wave * 0.2)
+                self.damage_player(14 + self.wave * 0.2)
 
         if self.boss is not None:
             if distance((self.boss.x, self.boss.y), (self.player.x, self.player.y)) < self.boss.radius + self.player.radius:
-                self.player.take_damage(self.boss_contact_damage())
+                self.damage_player(self.boss_contact_damage())
 
         for orb in self.player.fire_orbiters:
             for enemy in self.enemies:
                 if distance((orb.x, orb.y), (enemy.x, enemy.y)) < orb.size + enemy.radius:
+                    if enemy.fire_orb_hit_cd <= 0:
+                        orb_impact_damage = self.player.damage * 0.45
+                        self.damage_enemy(enemy, orb_impact_damage)
+                        enemy.fire_orb_hit_cd = 0.35
                     enemy.burn_timer = max(enemy.burn_timer, 3.0)
-                    enemy.burn_dps = max(enemy.burn_dps, 10.0)
+                    orb_burn_dps = 4.0 + enemy.max_hp * 0.05
+                    enemy.burn_dps = max(enemy.burn_dps, orb_burn_dps)
             if self.boss is not None:
                 if distance((orb.x, orb.y), (self.boss.x, self.boss.y)) < orb.size + self.boss.radius:
+                    if self.boss.fire_orb_hit_cd <= 0:
+                        orb_impact_damage = self.player.damage * 0.45
+                        self.damage_boss(orb_impact_damage)
+                        self.boss.fire_orb_hit_cd = 0.35
                     self.boss.burn_timer = max(self.boss.burn_timer, 3.0)
-                    self.boss.burn_dps = max(self.boss.burn_dps, 10.0)
+                    orb_burn_dps = 6.0 + self.boss.max_hp * 0.012
+                    self.boss.burn_dps = max(self.boss.burn_dps, orb_burn_dps)
 
         if self.player.fire_ring:
             ring_radius = self.player.fire_ring_radius
@@ -2123,7 +2278,7 @@ class Game:
         for enemy in self.enemies:
             enemy.update(dt, (self.player.x, self.player.y), self.projectiles, self.wave)
             if enemy.kind == "tank" and enemy.beam_hits_player((self.player.x, self.player.y)):
-                self.player.take_damage(20)
+                self.damage_player(20)
 
         for enemy in list(self.enemies):
             if enemy.hp <= 0:
@@ -2140,7 +2295,7 @@ class Game:
                 self.boss_attack_damage(),
             )
             if self.boss.laser_hits_player((self.player.x, self.player.y)) and self.boss.can_laser_damage():
-                self.player.take_damage(self.boss_attack_damage())
+                self.damage_player(self.boss_attack_damage())
             if self.boss is not None and self.boss.hp <= 0:
                 self.on_boss_killed()
 
@@ -2227,7 +2382,7 @@ class Game:
             if zone.should_damage:
                 zone.should_damage = False
                 if distance((zone.x, zone.y), (self.player.x, self.player.y)) <= zone.radius + self.player.radius:
-                    self.player.take_damage(zone.damage)
+                    self.damage_player(zone.damage)
             if zone.time_left <= 0:
                 self.boss_zones.remove(zone)
 
@@ -2250,6 +2405,10 @@ class Game:
             dmg.update(dt)
             if dmg.time_left <= 0:
                 self.damage_numbers.remove(dmg)
+        for pulse in list(self.pulse_effects):
+            pulse.update(dt)
+            if pulse.time_left <= 0:
+                self.pulse_effects.remove(pulse)
 
         if self.state == "playing" and not self.enemies and self.boss is None:
             self.wave += 1
@@ -2628,6 +2787,8 @@ class Game:
             beam.draw(self.screen)
         for strike in self.lightning_effects:
             strike.draw(self.screen)
+        for pulse in self.pulse_effects:
+            pulse.draw(self.screen)
         for dmg in self.damage_numbers:
             ratio = clamp(dmg.time_left / max(0.001, dmg.duration), 0.0, 1.0)
             alpha = int(255 * ratio)
