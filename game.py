@@ -833,17 +833,13 @@ class Player:
                 orb.rel_y = orbit_radius * math.sin(orb.angle)
             return
 
-        if count <= 6:
-            inner_count = count
-            outer_count = 0
-        else:
-            inner_count = math.ceil(count / 2)
-            outer_count = count - inner_count
+        inner_count = min(count, 6)
+        outer_count = min(max(0, count - inner_count), 8)
 
-        inner_radius = 52.0
-        outer_radius = 82.0
-        inner_step = math.tau / max(1, inner_count)
-        outer_step = math.tau / max(1, outer_count) if outer_count > 0 else 0.0
+        inner_radius = 54.0
+        outer_radius = 94.0
+        inner_step = math.tau / inner_count if inner_count > 0 else 0.0
+        outer_step = math.tau / outer_count if outer_count > 0 else 0.0
 
         for i, orb in enumerate(self.fire_orbiters):
             if i < inner_count:
@@ -853,8 +849,8 @@ class Player:
             else:
                 j = i - inner_count
                 orb.radius = outer_radius
-                orb.speed = 2.1
-                offset = (inner_step * 0.5) if inner_count > 0 else 0.0
+                orb.speed = 1.8
+                offset = (outer_step * 0.5) if outer_count > 1 else 0.0
                 orb.angle = j * outer_step + offset
             orb.rel_x = orb.radius * math.cos(orb.angle)
             orb.rel_y = orb.radius * math.sin(orb.angle)

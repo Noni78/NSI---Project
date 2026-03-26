@@ -5,7 +5,7 @@ Pour ce qui est du choix du jeu, on a cherché une idée réalisable en python a
 Le Jeu est dans le style die and retry, c'est à dire qu'a chaque nouvelle partie on recommence de zéro au niveau matériel  dans le jeu
 mais on à appris quel combos d'amélioration sont efficace ensemble ou au contraire quoi éviter.
 
-Nolan : Je me suis concentré sur tout ce qui est méchanique de jeu, c'est à dire, le comportement des power up, ennemi et du personnages
+Nolan : Je me suis concentré sur tout ce qui est mécanique de jeu, c'est à dire, le comportement des power up, ennemi et du personnage
 Vlad : Quant à moi je me suis concentré sur l'interface graphique ainsi que chercher ou dessiner les artworks ainsi que de l'équilibrage du jeu, on a réalisé beaucoup de playtest afin que le jeu soit agréble à jouer et ni trop dur ni trop simple
 
 ## On montre du gameplay
