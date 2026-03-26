@@ -1424,9 +1424,11 @@ TEMP_PICKUP_POOL = ["shield", "haste", "multishot", "heal"]
 ####################
 class Game:
     def __init__(self):
+        global WIDTH, HEIGHT
         pygame.init()
         pygame.display.set_caption("Tank Survivor")
-        self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
+        self.screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.FULLSCREEN)
+        WIDTH, HEIGHT = self.screen.get_size()
         self.clock = pygame.time.Clock()
         self.font_path = os.path.join(DATA_DIR, "genshin.ttf")
         self.font = pygame.font.Font(self.font_path, 18)
