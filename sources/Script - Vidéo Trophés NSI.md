@@ -9,17 +9,17 @@ mais on à appris quel combos d'amélioration sont efficace ensemble ou au contr
 ## On montre du gameplay
 
 montrer : du gameplay pour expliquer 
- - système de vague
-    - Les différents ennemis
-    - La vague du boss tout les 5 vague
- - le contrôle du perso  
+ - le contrôle du perso  <>
     - Bouger (ZQSD ou flèche)
     - La compétence (E) qui se recharge avec le temps
     - L'Ulti (A) qui se recharge absorbant l'ame des annemis en les tuants
- - Les niveaux:
-    - Les ennemis laissent tomber des gemmes d'xp qui permettent de monter en niveau 
-    - en montant en niveau on gagne des dégats et de la vie max
  - Le coeur du gameplay : Les power up
     - On en gagne en montant de niveau ou battant une vague
     - On a la choix parmis 3 upgrade choisi aléatoirement de niveau commun ou épique
     - Montrer l'elf electro et les boules de feu plus
+ - système de vague
+    - Les différents ennemis
+    - La vague du boss tout les 5 vague
+ - Les niveaux:
+    - Les ennemis laissent tomber des gemmes d'xp qui permettent de monter en niveau 
+    - en montant en niveau on gagne des dégats et de la vie max
