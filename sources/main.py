@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from typing import Optional
 import pygame
 
+BASE_DIR = os.path.dirname(__file__)
+DATA_DIR = os.path.join(BASE_DIR, "datas")
 
 WIDTH, HEIGHT = 1500, 800
 FPS = 60
@@ -112,7 +114,7 @@ class Rocket:
 
     def load_sprite(self):
         if Rocket._sprite_base is None and not Rocket._sprite_missing:
-            path = os.path.join(os.path.dirname(__file__), "rocket.png")
+            path = os.path.join(DATA_DIR, "rocket.png")
             if os.path.exists(path):
                 try:
                     Rocket._sprite_base = pygame.image.load(path).convert_alpha()
@@ -208,7 +210,7 @@ class UpgradePickup:
             filename = "multishot.png"
         else:
             return None
-        path = os.path.join(os.path.dirname(__file__), filename)
+        path = os.path.join(DATA_DIR, filename)
         if os.path.exists(path):
             try:
                 img = pygame.image.load(path).convert_alpha()
@@ -265,7 +267,7 @@ class ExpGem:
 
     def load_sprite(self):
         if ExpGem._sprite_base is None and not ExpGem._sprite_missing:
-            path = os.path.join(os.path.dirname(__file__), "gem.png")
+            path = os.path.join(DATA_DIR, "gem.png")
             if os.path.exists(path):
                 try:
                     ExpGem._sprite_base = pygame.image.load(path).convert_alpha()
@@ -385,7 +387,7 @@ class Enemy:
             filename = "shooter.png"
         else:
             return None
-        path = os.path.join(os.path.dirname(__file__), filename)
+        path = os.path.join(DATA_DIR, filename)
         if os.path.exists(path):
             try:
                 img = pygame.image.load(path).convert_alpha()
@@ -748,7 +750,7 @@ class Player:
         
 
     def load_sprite(self):
-        path = os.path.join(os.path.dirname(__file__), "character.png")
+        path = os.path.join(DATA_DIR, "character.png")
         if os.path.exists(path):
             try:
                 img = pygame.image.load(path).convert_alpha()
@@ -759,7 +761,7 @@ class Player:
         return None
 
     def load_shield_sprite(self):
-        path = os.path.join(os.path.dirname(__file__), "shield.png")
+        path = os.path.join(DATA_DIR, "shield.png")
         if os.path.exists(path):
             try:
                 img = pygame.image.load(path).convert_alpha()
@@ -993,7 +995,7 @@ class FireOrbiter:
 
     def load_sprite(self):
         if FireOrbiter._sprite_base is None and not FireOrbiter._sprite_missing:
-            path = os.path.join(os.path.dirname(__file__), "fireball.png")
+            path = os.path.join(DATA_DIR, "fireball.png")
             if os.path.exists(path):
                 try:
                     FireOrbiter._sprite_base = pygame.image.load(path).convert_alpha()
@@ -1055,7 +1057,7 @@ class LaserOrb:
 
     def load_sprite(self):
         if LaserOrb._sprite_base is None and not LaserOrb._sprite_missing:
-            path = os.path.join(os.path.dirname(__file__), "laser_orb.png")
+            path = os.path.join(DATA_DIR, "laser_orb.png")
             if os.path.exists(path):
                 try:
                     LaserOrb._sprite_base = pygame.image.load(path).convert_alpha()
@@ -1274,7 +1276,7 @@ class ElectroElf:
         self._pick_new_target()
 
     def load_sprite(self):
-        path = os.path.join(os.path.dirname(__file__), "electroelf.png")
+        path = os.path.join(DATA_DIR, "electroelf.png")
         if os.path.exists(path):
             try:
                 img = pygame.image.load(path).convert_alpha()
@@ -1426,7 +1428,7 @@ class Game:
         pygame.display.set_caption("Tank Survivor")
         self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
         self.clock = pygame.time.Clock()
-        self.font_path = os.path.join(os.path.dirname(__file__), "genshin.ttf")
+        self.font_path = os.path.join(DATA_DIR, "genshin.ttf")
         self.font = pygame.font.Font(self.font_path, 18)
         self.big_font = pygame.font.Font(self.font_path, 28)
         self.damage_fonts = {}
@@ -1572,7 +1574,7 @@ class Game:
 
     def load_ui_icons(self):
         icons = {}
-        base = os.path.dirname(__file__)
+        base = DATA_DIR
         for key, filename in [
             ("multishot", "multishot.png"),
             ("haste", "haste.png"),
@@ -1591,7 +1593,7 @@ class Game:
 
     def load_upgrade_icons(self):
         icons = {}
-        base = os.path.dirname(__file__)
+        base = DATA_DIR
         mapping = {
             "speed": "speed.png",
             "proj_speed": "bullet_speed.png",

@@ -1,4 +1,0 @@
-Die and Retry est un jeu d'action realise en Premiere NSI avec Python et Pygame. 
-Le joueur survit a des vagues d'ennemis de plus en plus difficiles, 
-affronte un boss toutes les 5 vagues et progresse grace aux gemmes d'experience. 
-A chaque niveau, il choisit des ameliorations (communes ou epiques) pour creer des synergies et adapter sa strategie.

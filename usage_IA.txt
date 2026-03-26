@@ -1,0 +1,16 @@
+Degré de création originale:
+Le code de ce projet est à 90% original.
+
+--- Citation des sources externes ---
+Le projet utilise la bibliothèque Pygame (version 2.6.0), donc lecture de la documentation, 
+de même pour dataclasses, os, random, sys et typing 
+--- Exploitation de codes existants --- 
+Aucun code existant n'a été exploité de manière significative. 
+Quelques exemples de code standard, comme l'initialisation d'une fenêtre Pygame ou la gestion des collisions basiques, 
+sont inspirés de tutoriels youtube et/ou vu en cours de NSI.
+
+--- Modalités d’utilisation de l’intelligence artificielle ---
+ --> mise en forme propre du code sans alterer la logique
+ L'IA n'a pas été utilisée pour générer du code fonctionnel principal
+ --> utilisations de l'IA dans le processus de développement au niveau du brainstorming et pour aider à décomposer/planifier en plusieurs problème moins complexe
+

@@ -1,6 +1,6 @@
 ﻿# Lancer le projet
 
-Ce fichier explique comment executer le jeu Tank survivor.
+Ce fichier explique comment exécuter le jeu Tank Survivor.
 
 ## 1. Contrainte de version Python
 - Version recommandee : `Python 3.13.7` (version utilisee pour les tests du projet).

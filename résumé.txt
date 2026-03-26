@@ -1,0 +1,5 @@
+Tank Survivor est un jeu d'action réalisé en Première NSI avec Python et Pygame.
+Le joueur survit à des vagues d'ennemis de plus en plus difficiles
+et affronte un boss toutes les 5 vagues.
+À chaque niveau, il choisit des améliorations (communes ou épiques) pour renforcer son personnage
+et adapter sa stratégie aux ennemis.
