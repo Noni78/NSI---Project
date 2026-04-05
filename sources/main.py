@@ -992,6 +992,11 @@ class Player:
         self.ultimate_beam_time = 0.0
         self.ultimate_cooldown = 0.0
         self.ultimate_cooldown_max = 10.0
+        self.vector_overdrive_time = 0.0
+        self.constellation_laser_beacons = 4
+        self.constellation_laser_damage_mult = 0.35
+        self.constellation_laser_tick = 0.1
+        self.constellation_laser_duration = 10.0
         self.shockwave_cooldown = 7.0
         self.shockwave_timer = self.shockwave_cooldown
         self.shockwave_radius = 240
@@ -1059,6 +1064,7 @@ class Player:
         self.multishot = max(0.0, self.multishot - dt)
         self.haste = max(0.0, self.haste - dt)
         self.heal_boost = max(0.0, self.heal_boost - dt)
+        self.vector_overdrive_time = max(0.0, self.vector_overdrive_time - dt)
         self.hurt_timer = max(0.0, self.hurt_timer - dt)
         self.shield_hit_timer = max(0.0, self.shield_hit_timer - dt)
         self.hurt_fx_timer = max(0.0, self.hurt_fx_timer - dt)
@@ -1121,10 +1127,15 @@ class Player:
     def fire(self, target_pos, projectiles):
         if not self.can_fire():
             return
+        overdrive_on = self.vector_overdrive_time > 0
         self.fire_timer = self.fire_rate * (0.35 if self.haste > 0 else 1.0)
+        if overdrive_on:
+            self.fire_timer *= 0.62
         angle = math.atan2(target_pos[1] - self.y, target_pos[0] - self.x)
 
         pickup_bonus = 6 if self.multishot > 0 else 0
+        if overdrive_on:
+            pickup_bonus += 2
         shots = clamp(self.bullets_per_shot + pickup_bonus, 1, 80)
         max_spread = 0.35 + (shots / 80) * 0.95
         if shots == 1:
@@ -1134,7 +1145,13 @@ class Player:
             offsets = [(-max_spread + i * step) for i in range(shots)]
 
         dmg_mult = 1.4 if self.haste > 0 else 1.0
+        if overdrive_on:
+            dmg_mult *= 1.55
         base_radius = 7 if self.haste > 0 else 4
+        if overdrive_on:
+            base_radius += 1
+        projectile_speed = self.projectile_speed * (1.3 if overdrive_on else 1.0)
+        projectile_color = (125, 240, 255) if overdrive_on else YELLOW
 
         for offset in offsets:
             proj_radius = base_radius
@@ -1145,10 +1162,10 @@ class Player:
                 Projectile(
                     self.x,
                     self.y,
-                    ax * self.projectile_speed,
-                    ay * self.projectile_speed,
+                    ax * projectile_speed,
+                    ay * projectile_speed,
                     damage,
-                    color=YELLOW,
+                    color=projectile_color,
                     radius=proj_radius,
                     owner="player",
                 )
@@ -1171,6 +1188,15 @@ class Player:
             orb.draw(screen)
         if self.fire_ring:
             self.draw_fire_ring(screen)
+        if self.vector_overdrive_time > 0:
+            ratio = clamp(self.vector_overdrive_time / 8.0, 0.0, 1.0)
+            t = pygame.time.get_ticks() * 0.004
+            aura_r = int(self.radius + 18 + math.sin(t * 1.6) * 5)
+            aura = pygame.Surface((aura_r * 2 + 16, aura_r * 2 + 16), pygame.SRCALPHA)
+            center = (aura.get_width() // 2, aura.get_height() // 2)
+            pygame.draw.circle(aura, (95, 220, 255, int(55 * ratio + 20)), center, aura_r + 8, 6)
+            pygame.draw.circle(aura, (170, 242, 255, int(95 * ratio + 30)), center, aura_r, 2)
+            screen.blit(aura, (int(self.x - center[0]), int(self.y - center[1])))
         if self.laser_orb:
             self.laser_orb.draw(screen)
         if self.laser_orb_beam_timer > 0 and self.laser_orb and self.laser_orb_beam_pos:
@@ -1491,6 +1517,536 @@ class UltimatePulse:
         screen.blit(surf, (int(self.x - r - 4), int(self.y - r - 4)))
 
 
+class UltimateConstellation:
+    def __init__(
+        self,
+        node_count=4,
+        duration=10.0,
+        tick_interval=0.1,
+        margin=120,
+        preferred_points=None,
+    ):
+        self.node_count = max(4, int(node_count))
+        self.duration = duration
+        self.time_left = duration
+        self.tick_interval = tick_interval
+        self.tick_timer = 0.0
+        self.margin = margin
+        self.beam_width = 8
+        self.preferred_points = list(preferred_points) if preferred_points else []
+        self.nodes = self._generate_nodes()
+        self.edges = self._build_edges()
+
+    def _generate_nodes(self):
+        nodes = []
+        min_dist = max(90, int(min(WIDTH, HEIGHT) * 0.20 - self.node_count * 5))
+        min_dist = min(min_dist, 220)
+        preferred = list(self.preferred_points)
+        random.shuffle(preferred)
+        preferred_min_dist = max(72, int(min_dist * 0.62))
+        for px, py in preferred:
+            if len(nodes) >= self.node_count:
+                break
+            x = clamp(px, self.margin, WIDTH - self.margin)
+            y = clamp(py, self.margin, HEIGHT - self.margin)
+            if not nodes:
+                nodes.append((x, y))
+                continue
+            nearest = min(distance((x, y), n) for n in nodes)
+            if nearest >= preferred_min_dist:
+                nodes.append((x, y))
+
+        while len(nodes) < self.node_count:
+            best = None
+            best_score = -1.0
+            placed = False
+            for _ in range(180):
+                x = random.uniform(self.margin, WIDTH - self.margin)
+                y = random.uniform(self.margin, HEIGHT - self.margin)
+                if not nodes:
+                    nodes.append((x, y))
+                    placed = True
+                    break
+                nearest = min(distance((x, y), n) for n in nodes)
+                if nearest >= min_dist:
+                    nodes.append((x, y))
+                    placed = True
+                    break
+                if nearest > best_score:
+                    best_score = nearest
+                    best = (x, y)
+            if not placed:
+                if best is not None:
+                    nodes.append(best)
+                else:
+                    nodes.append(
+                        (
+                            random.uniform(self.margin, WIDTH - self.margin),
+                            random.uniform(self.margin, HEIGHT - self.margin),
+                        )
+                    )
+        cx = sum(x for x, _ in nodes) / len(nodes)
+        cy = sum(y for _, y in nodes) / len(nodes)
+        nodes.sort(key=lambda p: math.atan2(p[1] - cy, p[0] - cx))
+        return nodes
+
+    def _build_edges(self):
+        n = len(self.nodes)
+        edge_set = set()
+
+        def add_edge(i, j):
+            if i == j:
+                return
+            a, b = sorted((i, j))
+            edge_set.add((a, b))
+
+        for i in range(n):
+            add_edge(i, (i + 1) % n)
+
+        for i in range(0, n, 2):
+            add_edge(i, (i + 2) % n)
+
+        if n >= 7:
+            for i in range(1, n, 3):
+                add_edge(i, (i + 3) % n)
+
+        return list(edge_set)
+
+    def segments(self):
+        for i, j in self.edges:
+            yield self.nodes[i], self.nodes[j]
+
+    def center(self):
+        cx = sum(x for x, _ in self.nodes) / len(self.nodes)
+        cy = sum(y for _, y in self.nodes) / len(self.nodes)
+        return cx, cy
+
+    def update(self, dt):
+        self.time_left -= dt
+        self.tick_timer -= dt
+
+    def should_tick(self):
+        if self.tick_timer <= 0:
+            self.tick_timer += self.tick_interval
+            return True
+        return False
+
+    def draw(self, screen):
+        if self.time_left <= 0:
+            return
+        ratio = clamp(self.time_left / max(0.001, self.duration), 0.0, 1.0)
+        t = pygame.time.get_ticks() * 0.001
+        surf = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        glow_alpha = int(50 + 40 * ratio)
+        beam_alpha = int(135 + 80 * ratio)
+        core_alpha = int(190 + 65 * ratio)
+        pulse = 0.88 + 0.12 * math.sin(t * 4.0)
+
+        for (sx, sy), (ex, ey) in self.segments():
+            pygame.draw.line(
+                surf,
+                (70, 200, 255, glow_alpha),
+                (sx, sy),
+                (ex, ey),
+                int((self.beam_width + 8) * pulse),
+            )
+            pygame.draw.line(
+                surf,
+                (95, 225, 255, beam_alpha),
+                (sx, sy),
+                (ex, ey),
+                int((self.beam_width + 2) * pulse),
+            )
+            pygame.draw.line(
+                surf,
+                (230, 248, 255, core_alpha),
+                (sx, sy),
+                (ex, ey),
+                max(2, int(self.beam_width * 0.45)),
+            )
+
+        for idx, (x, y) in enumerate(self.nodes):
+            twinkle = 0.5 + 0.5 * math.sin(t * 5.0 + idx * 0.9)
+            r = 5 + int(2 * twinkle)
+            pygame.draw.circle(surf, (95, 225, 255, 80), (int(x), int(y)), r + 8)
+            pygame.draw.circle(surf, (175, 242, 255, 230), (int(x), int(y)), r)
+            pygame.draw.circle(surf, (255, 255, 255, 220), (int(x), int(y)), max(2, r // 2))
+
+        screen.blit(surf, (0, 0))
+
+
+class UltimatePrismaticBlade:
+    def __init__(
+        self,
+        x,
+        y,
+        start_angle=0.0,
+        duration=5.2,
+        tick_interval=0.12,
+        blade_count=3,
+        reach=None,
+        beam_width=30,
+        sweep_speed=2.9,
+    ):
+        self.x = x
+        self.y = y
+        self.start_angle = start_angle
+        self.duration = duration
+        self.time_left = duration
+        self.tick_interval = tick_interval
+        self.tick_timer = 0.0
+        self.blade_count = max(3, int(blade_count))
+        self.reach = reach if reach is not None else math.hypot(WIDTH, HEIGHT) * 0.58
+        self.beam_width = beam_width
+        self.sweep_speed = sweep_speed
+
+    def update(self, dt, anchor_pos=None):
+        self.time_left -= dt
+        self.tick_timer -= dt
+        if anchor_pos is not None:
+            self.x, self.y = anchor_pos
+
+    def should_tick(self):
+        if self.tick_timer <= 0:
+            self.tick_timer += self.tick_interval
+            return True
+        return False
+
+    def segments(self):
+        elapsed = self.duration - self.time_left
+        for i in range(self.blade_count):
+            base = self.start_angle + i * (math.tau / self.blade_count)
+            jitter = math.sin(elapsed * 2.2 + i * 0.7) * 0.22
+            ang = base + elapsed * self.sweep_speed + jitter
+            sx = self.x - math.cos(ang) * self.reach * 0.18
+            sy = self.y - math.sin(ang) * self.reach * 0.18
+            ex = self.x + math.cos(ang) * self.reach
+            ey = self.y + math.sin(ang) * self.reach
+            yield (sx, sy), (ex, ey)
+
+    def draw(self, screen):
+        if self.time_left <= 0:
+            return
+        ratio = clamp(self.time_left / max(0.001, self.duration), 0.0, 1.0)
+        surf = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        for (sx, sy), (ex, ey) in self.segments():
+            pygame.draw.line(
+                surf,
+                (255, 80, 200, int(55 + 35 * ratio)),
+                (sx, sy),
+                (ex, ey),
+                self.beam_width + 10,
+            )
+            pygame.draw.line(
+                surf,
+                (145, 220, 255, int(130 + 80 * ratio)),
+                (sx, sy),
+                (ex, ey),
+                self.beam_width,
+            )
+            pygame.draw.line(
+                surf,
+                (245, 250, 255, int(205 + 40 * ratio)),
+                (sx, sy),
+                (ex, ey),
+                max(2, int(self.beam_width * 0.34)),
+            )
+        screen.blit(surf, (0, 0))
+
+
+class UltimateVectorOverdrive:
+    def __init__(self, x, y, duration=8.0, tick_interval=0.24, max_targets=5):
+        self.x = x
+        self.y = y
+        self.duration = duration
+        self.time_left = duration
+        self.tick_interval = tick_interval
+        self.tick_timer = 0.0
+        self.max_targets = max_targets
+        self.arcs = []
+
+    def update(self, dt, anchor_pos=None):
+        self.time_left -= dt
+        self.tick_timer -= dt
+        if anchor_pos is not None:
+            self.x, self.y = anchor_pos
+        for arc in list(self.arcs):
+            arc["time_left"] -= dt
+            if arc["time_left"] <= 0:
+                self.arcs.remove(arc)
+
+    def should_tick(self):
+        if self.tick_timer <= 0:
+            self.tick_timer += self.tick_interval
+            return True
+        return False
+
+    def set_chain(self, points, duration=0.14):
+        if len(points) < 2:
+            return
+        segments = []
+        for i in range(len(points) - 1):
+            segments.append((points[i], points[i + 1]))
+        self.arcs.append({"segments": segments, "time_left": duration, "duration": duration})
+
+    def draw(self, screen):
+        if self.time_left <= 0:
+            return
+        ratio = clamp(self.time_left / max(0.001, self.duration), 0.0, 1.0)
+        t = pygame.time.get_ticks() * 0.001
+        pulse = 0.82 + 0.18 * math.sin(t * 8.0)
+        ring_r = int(62 + 12 * pulse)
+        aura = pygame.Surface((ring_r * 2 + 50, ring_r * 2 + 50), pygame.SRCALPHA)
+        center = (aura.get_width() // 2, aura.get_height() // 2)
+        pygame.draw.circle(aura, (90, 220, 255, int(40 + 25 * ratio)), center, ring_r + 12, 8)
+        pygame.draw.circle(aura, (170, 244, 255, int(120 + 70 * ratio)), center, ring_r, 3)
+        pygame.draw.circle(aura, (240, 252, 255, int(180 + 60 * ratio)), center, int(ring_r * 0.55), 2)
+        screen.blit(aura, (int(self.x - center[0]), int(self.y - center[1])))
+
+        for arc in self.arcs:
+            arc_ratio = clamp(arc["time_left"] / max(0.001, arc["duration"]), 0.0, 1.0)
+            surf = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+            for a, b in arc["segments"]:
+                pygame.draw.line(
+                    surf,
+                    (100, 220, 255, int(70 * arc_ratio)),
+                    a,
+                    b,
+                    9,
+                )
+                pygame.draw.line(
+                    surf,
+                    (170, 244, 255, int(180 * arc_ratio + 30)),
+                    a,
+                    b,
+                    4,
+                )
+                pygame.draw.line(
+                    surf,
+                    (255, 255, 255, int(220 * arc_ratio + 20)),
+                    a,
+                    b,
+                    2,
+                )
+            screen.blit(surf, (0, 0))
+
+
+class UltimateSpectralSwarm:
+    def __init__(self, x, y, duration=8.0, spawn_interval=0.1):
+        self.x = x
+        self.y = y
+        self.duration = duration
+        self.time_left = duration
+        self.spawn_interval = spawn_interval
+        self.spawn_timer = 0.0
+        self.spin = random.uniform(0.0, math.tau)
+
+    def update(self, dt, anchor_pos=None):
+        self.time_left -= dt
+        self.spawn_timer -= dt
+        self.spin = (self.spin + dt * 2.4) % math.tau
+        if anchor_pos is not None:
+            self.x, self.y = anchor_pos
+
+    def consume_spawn_count(self):
+        count = 0
+        while self.spawn_timer <= 0 and self.time_left > 0:
+            self.spawn_timer += self.spawn_interval
+            count += 1
+        return count
+
+    def emit_point(self):
+        ang = self.spin + random.uniform(-0.65, 0.65)
+        r = random.uniform(28, 62)
+        return self.x + math.cos(ang) * r, self.y + math.sin(ang) * r
+
+    def draw(self, screen):
+        if self.time_left <= 0:
+            return
+        ratio = clamp(self.time_left / max(0.001, self.duration), 0.0, 1.0)
+        r = int(68 + 8 * math.sin(pygame.time.get_ticks() * 0.008))
+        surf = pygame.Surface((r * 2 + 40, r * 2 + 40), pygame.SRCALPHA)
+        center = (surf.get_width() // 2, surf.get_height() // 2)
+        pygame.draw.circle(surf, (155, 110, 255, int(45 + 25 * ratio)), center, r + 10, 7)
+        pygame.draw.circle(surf, (215, 180, 255, int(110 + 70 * ratio)), center, r, 2)
+        for i in range(6):
+            ang = self.spin * 1.5 + i * (math.tau / 6)
+            px = center[0] + math.cos(ang) * (r - 10)
+            py = center[1] + math.sin(ang) * (r - 10)
+            pygame.draw.circle(surf, (238, 215, 255, 180), (int(px), int(py)), 3)
+        screen.blit(surf, (int(self.x - center[0]), int(self.y - center[1])))
+
+
+class UltimateSpectralShard:
+    def __init__(self, x, y, angle, speed, damage, lifetime=3.4):
+        self.x = x
+        self.y = y
+        self.vx = math.cos(angle) * speed
+        self.vy = math.sin(angle) * speed
+        self.speed = speed
+        self.turn_rate = 6.4
+        self.damage = damage
+        self.radius = 6
+        self.time_left = lifetime
+        self.target = None
+
+    def _pick_target(self, targets):
+        if not targets:
+            self.target = None
+            return
+        self.target = min(targets, key=lambda e: (e.x - self.x) ** 2 + (e.y - self.y) ** 2)
+
+    def update(self, dt, targets):
+        self.time_left -= dt
+        if self.target is None or self.target.hp <= 0 or self.target not in targets:
+            self._pick_target(targets)
+        if self.target is not None:
+            dx = self.target.x - self.x
+            dy = self.target.y - self.y
+            dist = math.hypot(dx, dy) or 1.0
+            desired_vx = (dx / dist) * self.speed
+            desired_vy = (dy / dist) * self.speed
+            mix = clamp(self.turn_rate * dt, 0.0, 1.0)
+            self.vx = self.vx + (desired_vx - self.vx) * mix
+            self.vy = self.vy + (desired_vy - self.vy) * mix
+        self.x += self.vx * dt
+        self.y += self.vy * dt
+
+    def offscreen(self):
+        return self.x < -50 or self.x > WIDTH + 50 or self.y < -50 or self.y > HEIGHT + 50
+
+    def draw(self, screen):
+        angle = math.atan2(self.vy, self.vx)
+        tail_x = self.x - math.cos(angle) * 14
+        tail_y = self.y - math.sin(angle) * 14
+        min_x = int(min(tail_x, self.x) - 16)
+        min_y = int(min(tail_y, self.y) - 16)
+        max_x = int(max(tail_x, self.x) + 16)
+        max_y = int(max(tail_y, self.y) + 16)
+        w = max(8, max_x - min_x)
+        h = max(8, max_y - min_y)
+        surf = pygame.Surface((w, h), pygame.SRCALPHA)
+        a = (tail_x - min_x, tail_y - min_y)
+        b = (self.x - min_x, self.y - min_y)
+        pygame.draw.line(surf, (190, 145, 255, 120), a, b, 6)
+        pygame.draw.line(surf, (245, 228, 255, 220), a, b, 2)
+        pygame.draw.circle(surf, (205, 165, 255, 190), (int(b[0]), int(b[1])), self.radius + 3)
+        pygame.draw.circle(surf, (255, 245, 255, 240), (int(b[0]), int(b[1])), self.radius)
+        screen.blit(surf, (min_x, min_y))
+
+
+class UltimateFractalPrism:
+    def __init__(
+        self,
+        x,
+        y,
+        duration=9.0,
+        tick_interval=0.16,
+        max_targets=6,
+        range_radius=430,
+        jump_range=320,
+    ):
+        self.x = x
+        self.y = y
+        self.duration = duration
+        self.time_left = duration
+        self.tick_interval = tick_interval
+        self.tick_timer = 0.0
+        self.max_targets = max_targets
+        self.range_radius = range_radius
+        self.jump_range = jump_range
+        self.links = []
+        self.spin = random.uniform(0.0, math.tau)
+        self.move_speed = 220.0
+        self.target = None
+        self.retarget_timer = 0.0
+        self.hover_distance = 110.0
+
+    def update(self, dt, targets=None):
+        if targets is None:
+            targets = []
+        self.time_left -= dt
+        self.tick_timer -= dt
+        self.retarget_timer -= dt
+        self.spin = (self.spin + dt * 1.35) % math.tau
+        for link in list(self.links):
+            link["time_left"] -= dt
+            if link["time_left"] <= 0:
+                self.links.remove(link)
+
+        living_targets = [target for target in targets if target.hp > 0]
+        if living_targets:
+            if (
+                self.target is None
+                or self.target.hp <= 0
+                or self.target not in living_targets
+                or self.retarget_timer <= 0
+            ):
+                self.target = min(
+                    living_targets,
+                    key=lambda e: (e.x - self.x) ** 2 + (e.y - self.y) ** 2,
+                )
+                self.retarget_timer = 0.18
+
+            dx = self.target.x - self.x
+            dy = self.target.y - self.y
+            dist = math.hypot(dx, dy) or 1.0
+
+            if dist > self.hover_distance:
+                step = min(dist - self.hover_distance, self.move_speed * dt)
+                self.x += (dx / dist) * step
+                self.y += (dy / dist) * step
+            else:
+                strafe_speed = self.move_speed * 0.3
+                ang = math.atan2(dy, dx) + math.pi / 2
+                self.x += math.cos(ang) * strafe_speed * dt
+                self.y += math.sin(ang) * strafe_speed * dt
+        else:
+            self.target = None
+            self.retarget_timer = 0.0
+
+        self.x = clamp(self.x, 40, WIDTH - 40)
+        self.y = clamp(self.y, 40, HEIGHT - 40)
+
+    def should_tick(self):
+        if self.tick_timer <= 0:
+            self.tick_timer += self.tick_interval
+            return True
+        return False
+
+    def set_chain(self, points, duration=0.14):
+        if len(points) < 2:
+            return
+        segments = []
+        for i in range(len(points) - 1):
+            segments.append((points[i], points[i + 1]))
+        self.links.append({"segments": segments, "time_left": duration, "duration": duration})
+
+    def draw(self, screen):
+        if self.time_left <= 0:
+            return
+        ratio = clamp(self.time_left / max(0.001, self.duration), 0.0, 1.0)
+        prism_r = 30 + int(6 * math.sin(pygame.time.get_ticks() * 0.006))
+        surf = pygame.Surface((prism_r * 2 + 60, prism_r * 2 + 60), pygame.SRCALPHA)
+        center = (surf.get_width() // 2, surf.get_height() // 2)
+        for spread, alpha in ((13, 28), (8, 50), (4, 84)):
+            pts = Enemy._regular_polygon(center, prism_r + spread, 3, self.spin + math.pi / 2)
+            pygame.draw.polygon(surf, (120, 215, 255, int(alpha + ratio * 14)), pts, 5 + spread // 2)
+        pts = Enemy._regular_polygon(center, prism_r, 3, self.spin + math.pi / 2)
+        pygame.draw.polygon(surf, (185, 245, 255, int(180 + 55 * ratio)), pts, 3)
+        pygame.draw.circle(surf, (255, 255, 255, int(170 + 65 * ratio)), center, 5)
+        screen.blit(surf, (int(self.x - center[0]), int(self.y - center[1])))
+
+        for link in self.links:
+            link_ratio = clamp(link["time_left"] / max(0.001, link["duration"]), 0.0, 1.0)
+            beam = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+            for a, b in link["segments"]:
+                pygame.draw.line(beam, (105, 210, 255, int(66 * link_ratio)), a, b, 10)
+                pygame.draw.line(beam, (180, 242, 255, int(180 * link_ratio + 25)), a, b, 4)
+                pygame.draw.line(beam, (255, 255, 255, int(225 * link_ratio + 15)), a, b, 2)
+            screen.blit(beam, (0, 0))
+
+
 class UltimateSingularity:
     def __init__(
         self,
@@ -1748,6 +2304,15 @@ class UpgradeChoice:
     desc: str
 
 
+@dataclass(frozen=True)
+class ClassChoice:
+    key: str
+    label: str
+    ultimate_key: str
+    ultimate_label: str
+    desc: str
+
+
 UPGRADE_POOL = [
     UpgradeChoice("speed", "Vitesse+", "Bonus de vitesse."),
     UpgradeChoice("proj_speed", "Proj Speed+", "Projectiles plus rapide."),
@@ -1767,6 +2332,69 @@ EPIC_UPGRADES = [
 ]
 
 TEMP_PICKUP_POOL = ["shield", "haste", "multishot", "heal"]
+
+CLASS_POOL = [
+    ClassChoice(
+        "laser_master",
+        "Maitre des Lasers",
+        "constellation_laser",
+        "Constellation Laser",
+        "Balises reliees par des lasers.",
+    ),
+    ClassChoice(
+        "blade_master",
+        "Maitre de la lame",
+        "prismatic_blade",
+        "Lame Prismatique",
+        "Trois slashes traversent le terrain.",
+    ),
+    ClassChoice(
+        "mad_biochemist",
+        "Biochimiste fou",
+        "vector_overdrive",
+        "Surcharge Vectorielle",
+        "Mode surcharge offensive temporaire.",
+    ),
+    ClassChoice(
+        "shard_master",
+        "Maitre des eclats",
+        "spectral_swarm",
+        "Essaim Spectral",
+        "Nuage d'eclats qui traquent les cibles.",
+    ),
+    ClassChoice(
+        "prismatic_tamer",
+        "Dresseur prismatique",
+        "fractal_prism",
+        "Prisme Fractal",
+        "Cristal qui enchaine des rayons.",
+    ),
+    ClassChoice(
+        "spatial_master",
+        "Maitre spatial",
+        "singularity",
+        "Singularite Neon",
+        "Trou noir qui attire puis explose.",
+    ),
+]
+
+LASER_CLASS_UPGRADES = [
+    UpgradeChoice(
+        "ulti_laser_cd",
+        "Ulti CDR",
+        "Reduit le cooldown de l'ulti Constellation Laser.",
+    ),
+    UpgradeChoice(
+        "ulti_laser_damage",
+        "Ulti Laser DMG",
+        "Augmente les degats par tick des rayons.",
+    ),
+    UpgradeChoice(
+        "ulti_laser_nodes",
+        "Ulti Balises+",
+        "Ajoute des balises a la constellation (max 12).",
+    ),
+]
 
 ####################
 # --- Mainloop --- #
@@ -1793,7 +2421,13 @@ class Game:
         self.ultimate_beams = []
         self.ultimate_pulses = []
         self.ultimate_zones = []
+        self.ultimate_constellations = []
         self.ultimate_singularities = []
+        self.ultimate_prismatic_blades = []
+        self.ultimate_vector_overdrives = []
+        self.ultimate_spectral_swarms = []
+        self.ultimate_spectral_shards = []
+        self.ultimate_fractal_prisms = []
         self.shockwaves = []
         self.boss = None
         self.boss_zones = []
@@ -1802,13 +2436,16 @@ class Game:
         self.damage_numbers = []
         self.pulse_effects = []
         self.wave = 1
-        self.state = "playing"
+        self.state = "class_select"
         self.score = 0
         self.upgrade_choices = []
+        self.ui_buttons = []
+        self.class_choices = []
+        self.selected_class: Optional[ClassChoice] = None
+        self.selected_ultimate_key = "singularity"
         self.ui_icons = self.load_ui_icons()
         self.upgrade_icons = self.load_upgrade_icons()
         self.reset_game()
-        self.ui_buttons = []
         self.cheats_enabled = False
         self.cheat_buttons = []
         self.pending_upgrades = 0
@@ -1841,6 +2478,12 @@ class Game:
             return self.player.rocket_level
         if key == "fire_ring":
             return self.player.fire_ring_level
+        if key == "ulti_laser_cd":
+            return max(0, int(round((10.0 - self.player.ultimate_cooldown_max) / 0.7)))
+        if key == "ulti_laser_damage":
+            return max(0, int(round((self.player.constellation_laser_damage_mult - 0.35) / 0.05)))
+        if key == "ulti_laser_nodes":
+            return max(0, int((self.player.constellation_laser_beacons - 4) / 2))
         return 0
 
     def upgrade_max_level(self, key):
@@ -1858,6 +2501,12 @@ class Game:
             return 19
         if key == "fire_ring":
             return 10
+        if key == "ulti_laser_cd":
+            return 8
+        if key == "ulti_laser_damage":
+            return 10
+        if key == "ulti_laser_nodes":
+            return 4
         return None
 
     def upgrade_is_maxed(self, key):
@@ -1904,7 +2553,13 @@ class Game:
         self.ultimate_beams.clear()
         self.ultimate_pulses.clear()
         self.ultimate_zones.clear()
+        self.ultimate_constellations.clear()
         self.ultimate_singularities.clear()
+        self.ultimate_prismatic_blades.clear()
+        self.ultimate_vector_overdrives.clear()
+        self.ultimate_spectral_swarms.clear()
+        self.ultimate_spectral_shards.clear()
+        self.ultimate_fractal_prisms.clear()
         self.shockwaves.clear()
         self.boss = None
         self.boss_zones.clear()
@@ -1921,8 +2576,51 @@ class Game:
         self.wave_killed = 0
         self.gem_rush_timer = 0.0
         self.boss_death_timer = 0.0
+        self.selected_class = None
+        self.selected_ultimate_key = "singularity"
         self.spawn_wave(self.wave)
+        self.prepare_class_choices()
+        self.state = "class_select"
+
+    def prepare_class_choices(self):
+        count = min(3, len(CLASS_POOL))
+        self.class_choices = random.sample(CLASS_POOL, k=count)
+        self.build_class_select_buttons()
+
+    def build_class_select_buttons(self):
+        self.ui_buttons = []
+        panel_w = int(WIDTH * 0.84)
+        panel_h = int(HEIGHT * 0.68)
+        panel_x = (WIDTH - panel_w) / 2
+        panel_y = (HEIGHT - panel_h) / 2
+        gap = 26
+        count = max(1, len(self.class_choices))
+        card_w = (panel_w - gap * (count + 1)) / count
+        card_h = panel_h - 92
+        card_y = panel_y + 64
+        for i, class_choice in enumerate(self.class_choices):
+            card_x = panel_x + gap + i * (card_w + gap)
+            rect = pygame.Rect(card_x, card_y, card_w, card_h)
+            self.ui_buttons.append({"rect": rect, "class_choice": class_choice})
+
+    def select_class(self, class_choice):
+        self.selected_class = class_choice
+        self.selected_ultimate_key = class_choice.ultimate_key
         self.state = "playing"
+        self.ui_buttons = []
+
+    def active_ultimate_key(self):
+        implemented = {
+            "singularity",
+            "constellation_laser",
+            "prismatic_blade",
+            "vector_overdrive",
+            "spectral_swarm",
+            "fractal_prism",
+        }
+        if self.selected_ultimate_key in implemented:
+            return self.selected_ultimate_key
+        return "singularity"
 
 
     def load_ui_icons(self):
@@ -1959,6 +2657,9 @@ class Game:
             "fire_ring": "fire_ring.png",
             "laser_orb":"laser_orb.png",
             "electroelf":"electroelf.png",
+            "ulti_laser_cd": "attack_speed.png",
+            "ulti_laser_damage": "damage.png",
+            "ulti_laser_nodes": "laser_orb.png",
         }
         for key, filename in mapping.items():
             path = os.path.join(base, filename)
@@ -2055,6 +2756,12 @@ class Game:
                 self.player.rocket_count = min(10, self.player.rocket_count + 1)
             else:
                 self.player.rocket_cooldown = max(1.0, self.player.rocket_cooldown - 0.5)
+        elif key == "ulti_laser_cd":
+            self.player.ultimate_cooldown_max = max(4.0, self.player.ultimate_cooldown_max - 0.7)
+        elif key == "ulti_laser_damage":
+            self.player.constellation_laser_damage_mult += 0.05
+        elif key == "ulti_laser_nodes":
+            self.player.constellation_laser_beacons = min(12, self.player.constellation_laser_beacons + 2)
 
     def prepare_upgrade_choices(self):
         pool = [
@@ -2062,6 +2769,10 @@ class Game:
             for u in UPGRADE_POOL
             if not (self.player.fire_ring and u.key == "fire_orb") and not self.upgrade_is_maxed(u.key)
         ]
+        if self.selected_class and self.selected_class.key == "laser_master":
+            for u in LASER_CLASS_UPGRADES:
+                if not self.upgrade_is_maxed(u.key):
+                    pool.append(u)
         if self.player.laser_orb_level <= 0 and not self.upgrade_is_maxed("laser_orb"):
             pool.append(EPIC_UPGRADES[0])
         if not self.upgrade_is_maxed("electroelf"):
@@ -2294,7 +3005,123 @@ class Game:
             return False
         if self.player.ultimate_cooldown > 0:
             return False
-        tx, ty = pygame.mouse.get_pos()
+        active_key = self.active_ultimate_key()
+        target_pos = pygame.mouse.get_pos()
+        if active_key == "constellation_laser":
+            self._activate_constellation_laser_ultimate()
+            return True
+        if active_key == "prismatic_blade":
+            self._activate_prismatic_blade_ultimate(target_pos)
+            return True
+        if active_key == "vector_overdrive":
+            self._activate_vector_overdrive_ultimate()
+            return True
+        if active_key == "spectral_swarm":
+            self._activate_spectral_swarm_ultimate()
+            return True
+        if active_key == "fractal_prism":
+            self._activate_fractal_prism_ultimate(target_pos)
+            return True
+        if active_key == "singularity":
+            self._activate_singularity_ultimate(target_pos)
+            return True
+        return False
+
+    def _clear_ultimate_effects(self):
+        self.player.vector_overdrive_time = 0.0
+        self.ultimate_beams.clear()
+        self.ultimate_zones.clear()
+        self.ultimate_constellations.clear()
+        self.ultimate_singularities.clear()
+        self.ultimate_prismatic_blades.clear()
+        self.ultimate_vector_overdrives.clear()
+        self.ultimate_spectral_swarms.clear()
+        self.ultimate_spectral_shards.clear()
+        self.ultimate_fractal_prisms.clear()
+
+    def _activate_constellation_laser_ultimate(self):
+        self.player.ultimate_charge = 0
+        self.player.ultimate_beam_time = self.player.constellation_laser_duration
+        self.player.ultimate_cooldown = 0.0
+        self._clear_ultimate_effects()
+        preferred_points = [(enemy.x, enemy.y) for enemy in self.enemies if enemy.hp > 0]
+        if self.boss is not None and self.boss.hp > 0:
+            preferred_points.append((self.boss.x, self.boss.y))
+        constellation = UltimateConstellation(
+            node_count=self.player.constellation_laser_beacons,
+            duration=self.player.ultimate_beam_time,
+            tick_interval=self.player.constellation_laser_tick,
+            margin=120,
+            preferred_points=preferred_points,
+        )
+        self.ultimate_constellations.append(constellation)
+        self.ultimate_pulses.append(UltimatePulse(self.player.x, self.player.y, 120, duration=0.28))
+        cx, cy = constellation.center()
+        self.ultimate_pulses.append(UltimatePulse(cx, cy, 180, duration=0.35))
+
+    def _activate_prismatic_blade_ultimate(self, target_pos):
+        sx, sy = self.player.x, self.player.y
+        angle = math.atan2(target_pos[1] - sy, target_pos[0] - sx)
+        self.player.ultimate_charge = 0
+        self.player.ultimate_beam_time = 5.2
+        self.player.ultimate_cooldown = 0.0
+        self._clear_ultimate_effects()
+        blade = UltimatePrismaticBlade(sx, sy, start_angle=angle, duration=self.player.ultimate_beam_time)
+        self.ultimate_prismatic_blades.append(blade)
+        self.ultimate_pulses.append(UltimatePulse(sx, sy, 130, duration=0.26))
+
+    def _activate_vector_overdrive_ultimate(self):
+        self.player.ultimate_charge = 0
+        self.player.ultimate_beam_time = 8.0
+        self.player.ultimate_cooldown = 0.0
+        self._clear_ultimate_effects()
+        self.player.vector_overdrive_time = self.player.ultimate_beam_time
+        overdrive = UltimateVectorOverdrive(
+            self.player.x,
+            self.player.y,
+            duration=self.player.ultimate_beam_time,
+        )
+        self.ultimate_vector_overdrives.append(overdrive)
+        self.ultimate_pulses.append(UltimatePulse(self.player.x, self.player.y, 145, duration=0.28))
+
+    def _activate_spectral_swarm_ultimate(self):
+        self.player.ultimate_charge = 0
+        self.player.ultimate_beam_time = 8.0
+        self.player.ultimate_cooldown = 0.0
+        self._clear_ultimate_effects()
+        swarm = UltimateSpectralSwarm(
+            self.player.x,
+            self.player.y,
+            duration=self.player.ultimate_beam_time,
+            spawn_interval=0.1,
+        )
+        self.ultimate_spectral_swarms.append(swarm)
+        self.ultimate_pulses.append(UltimatePulse(self.player.x, self.player.y, 140, duration=0.28))
+
+    def _activate_fractal_prism_ultimate(self, target_pos):
+        tx, ty = target_pos
+        tx = clamp(tx, 60, WIDTH - 60)
+        ty = clamp(ty, 60, HEIGHT - 60)
+        px, py = self.player.x, self.player.y
+        dx = tx - px
+        dy = ty - py
+        dist = math.hypot(dx, dy) or 1.0
+        max_cast_range = 360.0
+        if dist > max_cast_range:
+            scale = max_cast_range / dist
+            tx = px + dx * scale
+            ty = py + dy * scale
+        self.player.ultimate_charge = 0
+        self.player.ultimate_beam_time = 9.0
+        self.player.ultimate_cooldown = 0.0
+        self._clear_ultimate_effects()
+        prism = UltimateFractalPrism(tx, ty, duration=self.player.ultimate_beam_time)
+        self.ultimate_fractal_prisms.append(prism)
+        self.ultimate_pulses.append(UltimatePulse(self.player.x, self.player.y, 120, duration=0.24))
+        self.ultimate_pulses.append(UltimatePulse(tx, ty, 150, duration=0.3))
+
+    def _activate_singularity_ultimate(self, target_pos):
+        tx, ty = target_pos
         tx = clamp(tx, 40, WIDTH - 40)
         ty = clamp(ty, 40, HEIGHT - 40)
         px, py = self.player.x, self.player.y
@@ -2305,9 +3132,7 @@ class Game:
         self.player.ultimate_charge = 0
         self.player.ultimate_beam_time = 6.0
         self.player.ultimate_cooldown = 0.0
-        self.ultimate_beams.clear()
-        self.ultimate_zones.clear()
-        self.ultimate_singularities.clear()
+        self._clear_ultimate_effects()
         singularity = UltimateSingularity(
             sx,
             sy,
@@ -2320,7 +3145,6 @@ class Game:
         self.ultimate_singularities.append(singularity)
         self.ultimate_pulses.append(UltimatePulse(self.player.x, self.player.y, 120, duration=0.3))
         self.ultimate_pulses.append(UltimatePulse(sx, sy, 170, duration=0.35))
-        return True
 
     def try_activate_shockwave(self):
         if self.player.shockwave_timer < self.player.shockwave_cooldown:
@@ -2740,6 +3564,35 @@ class Game:
             if zone.time_left <= 0:
                 self.ultimate_zones.remove(zone)
 
+        for constellation in list(self.ultimate_constellations):
+            constellation.update(dt)
+            if constellation.should_tick():
+                tick_damage = self.player.damage * self.player.constellation_laser_damage_mult
+                beam_hit_radius = constellation.beam_width * 0.5
+                hit_enemies = set()
+                boss_hit = False
+                for (sx, sy), (ex, ey) in constellation.segments():
+                    for enemy in self.enemies:
+                        if enemy in hit_enemies:
+                            continue
+                        dist = point_segment_distance(enemy.x, enemy.y, sx, sy, ex, ey)
+                        if dist <= enemy.radius + beam_hit_radius:
+                            hit_enemies.add(enemy)
+                    if self.boss is not None and not boss_hit:
+                        dist = point_segment_distance(self.boss.x, self.boss.y, sx, sy, ex, ey)
+                        if dist <= self.boss.radius + beam_hit_radius:
+                            boss_hit = True
+
+                for enemy in list(hit_enemies):
+                    self.damage_enemy(enemy, tick_damage)
+                if boss_hit:
+                    self.damage_boss(tick_damage * 0.85)
+
+            if constellation.time_left <= 0:
+                cx, cy = constellation.center()
+                self.ultimate_pulses.append(UltimatePulse(cx, cy, 180, duration=0.28))
+                self.ultimate_constellations.remove(constellation)
+
         for singularity in list(self.ultimate_singularities):
             singularity.update(dt, (self.player.x, self.player.y))
 
@@ -2781,6 +3634,150 @@ class Game:
                     if distance((self.boss.x, self.boss.y), (singularity.x, singularity.y)) <= singularity.explosion_radius:
                         self.damage_boss(collapse_damage * 0.8)
                 self.ultimate_singularities.remove(singularity)
+
+        for blade in list(self.ultimate_prismatic_blades):
+            blade.update(dt, (self.player.x, self.player.y))
+            if blade.should_tick():
+                tick_damage = self.player.damage * 0.32 + self.wave * 0.45
+                hit_radius = blade.beam_width * 0.52
+                hit_enemies = set()
+                boss_hit = False
+                for (sx, sy), (ex, ey) in blade.segments():
+                    for enemy in self.enemies:
+                        if enemy in hit_enemies:
+                            continue
+                        dist = point_segment_distance(enemy.x, enemy.y, sx, sy, ex, ey)
+                        if dist <= enemy.radius + hit_radius:
+                            hit_enemies.add(enemy)
+                    if self.boss is not None and not boss_hit:
+                        dist = point_segment_distance(self.boss.x, self.boss.y, sx, sy, ex, ey)
+                        if dist <= self.boss.radius + hit_radius:
+                            boss_hit = True
+                for enemy in list(hit_enemies):
+                    self.damage_enemy(enemy, tick_damage)
+                if boss_hit:
+                    self.damage_boss(tick_damage * 0.72)
+            if blade.time_left <= 0:
+                self.ultimate_pulses.append(UltimatePulse(blade.x, blade.y, 180, duration=0.24))
+                self.ultimate_prismatic_blades.remove(blade)
+
+        for overdrive in list(self.ultimate_vector_overdrives):
+            overdrive.update(dt, (self.player.x, self.player.y))
+            if overdrive.should_tick():
+                targets = list(self.enemies)
+                if self.boss is not None:
+                    targets.append(self.boss)
+                targets.sort(key=lambda e: (e.x - self.player.x) ** 2 + (e.y - self.player.y) ** 2)
+                chained = []
+                for target in targets:
+                    if len(chained) >= overdrive.max_targets:
+                        break
+                    if distance((target.x, target.y), (self.player.x, self.player.y)) <= 430:
+                        chained.append(target)
+                if chained:
+                    chain_points = [(self.player.x, self.player.y)]
+                    base_damage = self.player.damage * 0.8 + self.wave * 0.8
+                    for i, target in enumerate(chained):
+                        chain_points.append((target.x, target.y))
+                        dmg = base_damage * (0.88 ** i)
+                        if self.boss is not None and target is self.boss:
+                            self.damage_boss(dmg * 0.75)
+                        else:
+                            self.damage_enemy(target, dmg)
+                    overdrive.set_chain(chain_points)
+            if overdrive.time_left <= 0:
+                self.player.vector_overdrive_time = 0.0
+                self.ultimate_pulses.append(UltimatePulse(self.player.x, self.player.y, 150, duration=0.24))
+                self.ultimate_vector_overdrives.remove(overdrive)
+
+        for swarm in list(self.ultimate_spectral_swarms):
+            swarm.update(dt, (self.player.x, self.player.y))
+            spawn_count = swarm.consume_spawn_count()
+            for _ in range(spawn_count):
+                ex, ey = swarm.emit_point()
+                angle = random.uniform(0.0, math.tau)
+                speed = random.uniform(420.0, 540.0)
+                damage = self.player.damage * 1.22 + self.wave * 0.35
+                self.ultimate_spectral_shards.append(
+                    UltimateSpectralShard(ex, ey, angle, speed, damage, lifetime=3.4)
+                )
+            if swarm.time_left <= 0:
+                self.ultimate_pulses.append(UltimatePulse(self.player.x, self.player.y, 140, duration=0.22))
+                self.ultimate_spectral_swarms.remove(swarm)
+
+        for shard in list(self.ultimate_spectral_shards):
+            targets = list(self.enemies)
+            if self.boss is not None:
+                targets.append(self.boss)
+            shard.update(dt, targets)
+            hit = False
+            for enemy in list(self.enemies):
+                if distance((shard.x, shard.y), (enemy.x, enemy.y)) <= shard.radius + enemy.radius:
+                    self.damage_enemy(enemy, shard.damage)
+                    hit = True
+                    break
+            if not hit and self.boss is not None:
+                if distance((shard.x, shard.y), (self.boss.x, self.boss.y)) <= shard.radius + self.boss.radius:
+                    self.damage_boss(shard.damage * 0.78)
+                    hit = True
+            if hit:
+                self.spawn_pulse(
+                    shard.x,
+                    shard.y,
+                    color=(195, 160, 255),
+                    start_radius=8,
+                    end_radius=26,
+                    duration=0.11,
+                    width=2,
+                    fill_alpha=22,
+                )
+                self.ultimate_spectral_shards.remove(shard)
+                continue
+            if shard.time_left <= 0 or shard.offscreen():
+                self.ultimate_spectral_shards.remove(shard)
+
+        for prism in list(self.ultimate_fractal_prisms):
+            candidates = list(self.enemies)
+            if self.boss is not None:
+                candidates.append(self.boss)
+            prism.update(dt, candidates)
+            if prism.should_tick():
+                if candidates:
+                    candidates.sort(key=lambda e: (e.x - prism.x) ** 2 + (e.y - prism.y) ** 2)
+                    first = candidates[0]
+                    if distance((first.x, first.y), (prism.x, prism.y)) <= prism.range_radius:
+                        chain = [first]
+                        visited = {first}
+                        while len(chain) < prism.max_targets:
+                            current = chain[-1]
+                            next_target = None
+                            next_dist = None
+                            for candidate in candidates:
+                                if candidate in visited or candidate.hp <= 0:
+                                    continue
+                                d = distance((candidate.x, candidate.y), (current.x, current.y))
+                                if d <= prism.jump_range and (next_dist is None or d < next_dist):
+                                    next_dist = d
+                                    next_target = candidate
+                            if next_target is None:
+                                break
+                            chain.append(next_target)
+                            visited.add(next_target)
+
+                        points = [(prism.x, prism.y)]
+                        base_damage = self.player.damage * 1.45 + self.wave * 0.9
+                        for i, target in enumerate(chain):
+                            points.append((target.x, target.y))
+                            dmg = base_damage * (0.84 ** i)
+                            if self.boss is not None and target is self.boss:
+                                self.damage_boss(dmg * 0.76)
+                            else:
+                                self.damage_enemy(target, dmg)
+                        prism.set_chain(points)
+
+            if prism.time_left <= 0:
+                self.ultimate_pulses.append(UltimatePulse(prism.x, prism.y, 180, duration=0.26))
+                self.ultimate_fractal_prisms.remove(prism)
 
         for zone in list(self.boss_zones):
             zone.update(dt)
@@ -3137,6 +4134,173 @@ class Game:
             desc_y = rect.y + name_h + img_h + 6
             self.screen.blit(desc, (rect.x + 16, desc_y))
 
+    def draw_class_select_screen(self):
+        overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        overlay.fill((4, 10, 18, 232))
+        self.screen.blit(overlay, (0, 0))
+
+        panel_w = int(WIDTH * 0.84)
+        panel_h = int(HEIGHT * 0.68)
+        panel_x = (WIDTH - panel_w) / 2
+        panel_y = (HEIGHT - panel_h) / 2
+        panel_rect = pygame.Rect(panel_x, panel_y, panel_w, panel_h)
+
+        glow = pygame.Surface((panel_rect.width + 28, panel_rect.height + 28), pygame.SRCALPHA)
+        pygame.draw.rect(glow, (115, 225, 255, 30), glow.get_rect(), 10, border_radius=18)
+        self.screen.blit(glow, (panel_rect.x - 14, panel_rect.y - 14))
+        pygame.draw.rect(self.screen, (10, 18, 30), panel_rect, border_radius=14)
+        pygame.draw.rect(self.screen, (95, 190, 245), panel_rect, 2, border_radius=14)
+        inner = panel_rect.inflate(-16, -16)
+        pygame.draw.rect(self.screen, (170, 238, 255), inner, 1, border_radius=12)
+
+        title = self.big_font.render("Choisis ta classe", True, (220, 242, 255))
+        self.screen.blit(title, (panel_rect.centerx - title.get_width() / 2, panel_rect.y + 16))
+        subtitle = self.font.render(
+            "Ulti unique par classe.",
+            True,
+            (175, 212, 236),
+        )
+        self.screen.blit(subtitle, (panel_rect.centerx - subtitle.get_width() / 2, panel_rect.y + 48))
+
+        def draw_class_preview(img_rect, class_choice):
+            preview = pygame.Surface((img_rect.width, img_rect.height), pygame.SRCALPHA)
+            local_rect = preview.get_rect()
+            pygame.draw.rect(preview, (10, 18, 34, 220), local_rect, border_radius=8)
+            pygame.draw.rect(preview, (70, 130, 190, 170), local_rect, 1, border_radius=8)
+            t = pygame.time.get_ticks() * 0.001
+
+            if class_choice.ultimate_key == "constellation_laser":
+                cx, cy = local_rect.center
+                base_r = min(img_rect.width, img_rect.height) * 0.44
+                stars = []
+                for i in range(6):
+                    ang = t * 0.75 + i * (math.tau / 6)
+                    rr = base_r * (0.78 + 0.18 * math.sin(t * 1.7 + i * 1.2))
+                    stars.append((cx + math.cos(ang) * rr, cy + math.sin(ang) * rr))
+                hub = (
+                    cx + math.cos(t * 1.3) * 10,
+                    cy + math.sin(t * 1.1 + 0.8) * 10,
+                )
+
+                links = []
+                for i in range(len(stars)):
+                    links.append((stars[i], stars[(i + 2) % len(stars)]))
+                    links.append((hub, stars[i]))
+
+                for a, b in links:
+                    pygame.draw.line(preview, (70, 200, 255, 55), a, b, 10)
+                    pygame.draw.line(preview, (95, 225, 255, 120), a, b, 5)
+                    pygame.draw.line(preview, (220, 248, 255, 220), a, b, 2)
+
+                for x, y in stars:
+                    r = 5 + int(1.8 * (0.5 + 0.5 * math.sin(t * 4.0 + x * 0.03)))
+                    pygame.draw.circle(preview, (120, 230, 255, 100), (int(x), int(y)), r + 5)
+                    pygame.draw.circle(preview, (175, 242, 255, 220), (int(x), int(y)), r)
+                pygame.draw.circle(preview, (190, 246, 255, 230), (int(hub[0]), int(hub[1])), 6)
+                pygame.draw.circle(preview, (255, 255, 255, 210), (int(hub[0]), int(hub[1])), 2)
+            elif class_choice.ultimate_key == "prismatic_blade":
+                cx, cy = local_rect.center
+                reach = min(img_rect.width, img_rect.height) * 0.42
+                for i in range(3):
+                    ang = t * 2.4 + i * (math.tau / 3)
+                    sx = cx - math.cos(ang) * reach * 0.2
+                    sy = cy - math.sin(ang) * reach * 0.2
+                    ex = cx + math.cos(ang) * reach
+                    ey = cy + math.sin(ang) * reach
+                    pygame.draw.line(preview, (255, 90, 205, 65), (sx, sy), (ex, ey), 16)
+                    pygame.draw.line(preview, (155, 225, 255, 155), (sx, sy), (ex, ey), 8)
+                    pygame.draw.line(preview, (245, 250, 255, 225), (sx, sy), (ex, ey), 3)
+            elif class_choice.ultimate_key == "vector_overdrive":
+                cx, cy = local_rect.center
+                r = min(img_rect.width, img_rect.height) * 0.24
+                pulse = 0.9 + 0.1 * math.sin(t * 7.5)
+                rr = int(r * pulse)
+                pygame.draw.circle(preview, (90, 220, 255, 50), (cx, cy), rr + 26, 10)
+                pygame.draw.circle(preview, (170, 244, 255, 165), (cx, cy), rr + 8, 3)
+                chain = [
+                    (cx - rr * 1.3, cy - rr * 0.8),
+                    (cx - rr * 0.3, cy + rr * 0.1),
+                    (cx + rr * 0.7, cy - rr * 0.35),
+                    (cx + rr * 1.25, cy + rr * 0.75),
+                ]
+                for i in range(len(chain) - 1):
+                    pygame.draw.line(preview, (110, 225, 255, 120), chain[i], chain[i + 1], 7)
+                    pygame.draw.line(preview, (255, 255, 255, 215), chain[i], chain[i + 1], 2)
+            elif class_choice.ultimate_key == "spectral_swarm":
+                cx, cy = local_rect.center
+                orbit = min(img_rect.width, img_rect.height) * 0.28
+                for i in range(10):
+                    ang = t * 2.1 + i * (math.tau / 10)
+                    rr = orbit * (0.75 + 0.2 * math.sin(t * 2.7 + i))
+                    x = cx + math.cos(ang) * rr
+                    y = cy + math.sin(ang) * rr
+                    pygame.draw.circle(preview, (185, 145, 255, 120), (int(x), int(y)), 8)
+                    pygame.draw.circle(preview, (245, 232, 255, 230), (int(x), int(y)), 3)
+                pygame.draw.circle(preview, (170, 120, 255, 120), (cx, cy), int(orbit * 0.55), 2)
+            elif class_choice.ultimate_key == "fractal_prism":
+                cx, cy = local_rect.center
+                prism_r = min(img_rect.width, img_rect.height) * 0.2
+                pts = Enemy._regular_polygon((cx, cy), prism_r, 3, t * 1.2 + math.pi / 2)
+                for spread, alpha in ((10, 46), (5, 76), (0, 170)):
+                    draw_pts = Enemy._regular_polygon((cx, cy), prism_r + spread, 3, t * 1.2 + math.pi / 2)
+                    pygame.draw.polygon(preview, (120, 215, 255, alpha), draw_pts, max(2, 4 - spread // 6))
+                pygame.draw.polygon(preview, (220, 248, 255, 220), pts, 2)
+                for i in range(3):
+                    ang = t * 0.85 + i * (math.tau / 3)
+                    ex = cx + math.cos(ang) * prism_r * 2.2
+                    ey = cy + math.sin(ang) * prism_r * 2.2
+                    pygame.draw.line(preview, (120, 225, 255, 105), (cx, cy), (ex, ey), 7)
+                    pygame.draw.line(preview, (255, 255, 255, 210), (cx, cy), (ex, ey), 2)
+            elif class_choice.ultimate_key == "singularity":
+                cx, cy = local_rect.center
+                ring = int(min(img_rect.width, img_rect.height) * (0.22 + 0.04 * math.sin(t * 3.4)))
+                pygame.draw.circle(preview, (88, 220, 255, 42), (cx, cy), ring + 26, 10)
+                pygame.draw.circle(preview, (120, 232, 255, 105), (cx, cy), ring + 10, 4)
+                pygame.draw.circle(preview, (15, 30, 45, 175), (cx, cy), ring)
+                pygame.draw.circle(preview, (180, 244, 255, 205), (cx, cy), max(2, ring // 3), 2)
+            else:
+                pulse = 0.5 + 0.5 * math.sin(t * 2.4)
+                r = int(min(img_rect.width, img_rect.height) * (0.22 + pulse * 0.05))
+                center = local_rect.center
+                pygame.draw.circle(preview, (65, 190, 255, 45), center, r + 16, 8)
+                pygame.draw.circle(preview, (95, 220, 255, 115), center, r + 8, 4)
+                pygame.draw.circle(preview, (190, 245, 255, 215), center, r, 2)
+                pygame.draw.circle(preview, (210, 250, 255, 140), center, max(3, r // 3))
+
+            self.screen.blit(preview, img_rect.topleft)
+
+        mouse_pos = pygame.mouse.get_pos()
+        for btn in self.ui_buttons:
+            rect = btn["rect"]
+            class_choice = btn["class_choice"]
+            hovered = rect.collidepoint(mouse_pos)
+            color = (24, 38, 60) if hovered else (14, 24, 42)
+            border = (120, 215, 255) if hovered else (90, 175, 230)
+            card_glow = pygame.Surface((rect.width + 12, rect.height + 12), pygame.SRCALPHA)
+            pygame.draw.rect(card_glow, (115, 225, 255, 24), card_glow.get_rect(), 5, border_radius=10)
+            self.screen.blit(card_glow, (rect.x - 6, rect.y - 6))
+            pygame.draw.rect(self.screen, color, rect, border_radius=10)
+            pygame.draw.rect(self.screen, border, rect, 2, border_radius=10)
+
+            label = self.big_font.render(class_choice.label, True, (228, 244, 255))
+            self.screen.blit(label, (rect.x + 14, rect.y + 14))
+
+            ulti = self.font.render(
+                f"Ulti: {class_choice.ultimate_label}",
+                True,
+                (190, 222, 242),
+            )
+            self.screen.blit(ulti, (rect.x + 14, rect.y + 54))
+
+            img_rect = pygame.Rect(rect.x + 14, rect.y + 82, rect.width - 28, min(300, rect.height - 150))
+            draw_class_preview(img_rect, class_choice)
+
+            desc = self.font.render(class_choice.desc, True, (170, 202, 226))
+            self.screen.blit(desc, (rect.x + 14, img_rect.bottom + 10))
+
+            hint = self.font.render("Clique pour commencer la partie", True, (145, 190, 220))
+            self.screen.blit(hint, (rect.x + 14, rect.bottom - 30))
+
     def draw_game_over(self):
         overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
         overlay.fill((4, 10, 18, 232))
@@ -3227,8 +4391,20 @@ class Game:
             shock.draw(self.screen)
         for pulse in self.ultimate_pulses:
             pulse.draw(self.screen)
+        for constellation in self.ultimate_constellations:
+            constellation.draw(self.screen)
         for singularity in self.ultimate_singularities:
             singularity.draw(self.screen)
+        for blade in self.ultimate_prismatic_blades:
+            blade.draw(self.screen)
+        for overdrive in self.ultimate_vector_overdrives:
+            overdrive.draw(self.screen)
+        for prism in self.ultimate_fractal_prisms:
+            prism.draw(self.screen)
+        for swarm in self.ultimate_spectral_swarms:
+            swarm.draw(self.screen)
+        for shard in self.ultimate_spectral_shards:
+            shard.draw(self.screen)
         for zone in self.ultimate_zones:
             zone.draw(self.screen)
         for beam in self.ultimate_beams:
@@ -3259,6 +4435,8 @@ class Game:
         self.draw_cheat_buttons()
         if self.state == "upgrade":
             self.draw_upgrade_screen()
+        if self.state == "class_select":
+            self.draw_class_select_screen()
         if self.state == "game_over":
             self.draw_game_over()
         if self.state == "pause":
@@ -3287,7 +4465,12 @@ class Game:
                     if self.state == "playing":
                         self.try_activate_shockwave()
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    if self.state == "upgrade":
+                    if self.state == "class_select":
+                        for btn in self.ui_buttons:
+                            if btn["rect"].collidepoint(event.pos):
+                                self.select_class(btn["class_choice"])
+                                break
+                    elif self.state == "upgrade":
                         for btn in self.ui_buttons:
                             if btn["rect"].collidepoint(event.pos):
                                 self.apply_upgrade(btn["choice"].key)
