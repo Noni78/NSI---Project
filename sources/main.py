@@ -1532,7 +1532,8 @@ class UltimateConstellation:
         self.tick_interval = tick_interval
         self.tick_timer = 0.0
         self.margin = margin
-        self.beam_width = 8
+        self.beam_width = 8.0
+        self.node_move_speed = 72.0
         self.preferred_points = list(preferred_points) if preferred_points else []
         self.nodes = self._generate_nodes()
         self.edges = self._build_edges()
@@ -1621,9 +1622,69 @@ class UltimateConstellation:
         cy = sum(y for _, y in self.nodes) / len(self.nodes)
         return cx, cy
 
-    def update(self, dt):
+    def _extract_target_pos(self, target):
+        if hasattr(target, "x") and hasattr(target, "y"):
+            return float(target.x), float(target.y)
+        if isinstance(target, (tuple, list)) and len(target) >= 2:
+            return float(target[0]), float(target[1])
+        return None
+
+    def _assign_unique_targets(self, targets):
+        if not targets or not self.nodes:
+            return {}
+        valid_targets = []
+        for target in targets:
+            pos = self._extract_target_pos(target)
+            if pos is not None:
+                valid_targets.append(pos)
+        if not valid_targets:
+            return {}
+
+        pairs = []
+        for node_idx, (nx, ny) in enumerate(self.nodes):
+            for target_idx, (tx, ty) in enumerate(valid_targets):
+                d2 = (tx - nx) * (tx - nx) + (ty - ny) * (ty - ny)
+                pairs.append((d2, node_idx, target_idx))
+        pairs.sort(key=lambda p: p[0])
+
+        assigned_nodes = set()
+        assigned_targets = set()
+        assignment = {}
+        limit = min(len(self.nodes), len(valid_targets))
+        for _, node_idx, target_idx in pairs:
+            if node_idx in assigned_nodes or target_idx in assigned_targets:
+                continue
+            assignment[node_idx] = valid_targets[target_idx]
+            assigned_nodes.add(node_idx)
+            assigned_targets.add(target_idx)
+            if len(assignment) >= limit:
+                break
+        return assignment
+
+    def _move_nodes_toward_targets(self, dt, targets):
+        assignment = self._assign_unique_targets(targets)
+        if not assignment:
+            return
+        max_step = self.node_move_speed * dt
+        for node_idx, (tx, ty) in assignment.items():
+            nx, ny = self.nodes[node_idx]
+            dx = tx - nx
+            dy = ty - ny
+            dist = math.hypot(dx, dy)
+            if dist <= 1e-5:
+                continue
+            step = min(max_step, dist)
+            nx += (dx / dist) * step
+            ny += (dy / dist) * step
+            nx = clamp(nx, self.margin, WIDTH - self.margin)
+            ny = clamp(ny, self.margin, HEIGHT - self.margin)
+            self.nodes[node_idx] = (nx, ny)
+
+    def update(self, dt, targets=None):
         self.time_left -= dt
         self.tick_timer -= dt
+        if targets:
+            self._move_nodes_toward_targets(dt, targets)
 
     def should_tick(self):
         if self.tick_timer <= 0:
@@ -2437,19 +2498,19 @@ class ClassChoice:
 
 
 UPGRADE_POOL = [
-    UpgradeChoice("speed", "Vitesse+", "Bonus de vitesse."),
-    UpgradeChoice("proj_speed", "Proj Speed+", "Projectiles plus rapide."),
-    UpgradeChoice("damage", "Degats+", "Degats augmentes."),
-    UpgradeChoice("max_hp", "PV Max+", "Augmente la vie max."),
-    UpgradeChoice("fire_rate", "Cadence+", "Tire plus souvent et reduit le cooldown ulti de 0.1."),
-    UpgradeChoice("bullets", "Multi-tir+", "Plus de projectiles par tir."),
-    UpgradeChoice("fire_orb", "Orbe de feu", "Ajoute une boule de feu orbitale."),
-    UpgradeChoice("rockets", "Lance roquette", "Lance des roquettes."),
+    UpgradeChoice("speed", "Vitesse+", "Bonus de vitesse"),
+    UpgradeChoice("proj_speed", "Proj Speed+", "Projectiles plus rapide"),
+    UpgradeChoice("damage", "Degats+", "Degats augmentes"),
+    UpgradeChoice("max_hp", "PV Max+", "Augmente la vie max"),
+    UpgradeChoice("fire_rate", "Cadence+", "Augmente la cadence de tir"),
+    UpgradeChoice("bullets", "Multi-tir+", "Plus de projectiles par tir"),
+    UpgradeChoice("fire_orb", "Orbe de feu", "Ajoute une boule de feu qui orbite"),
+    UpgradeChoice("rockets", "Lance roquette", "Lance des roquettes"),
 ]
 
 EPIC_UPGRADES = [
-    UpgradeChoice("laser_orb", "Orbe laser", "Une orbe tire des lasers bleus."),
-    UpgradeChoice("electroelf", "Electroelf", "Familier qui lance des eclairs."),
+    UpgradeChoice("laser_orb", "Orbe laser", "Une orbe tire des lasers"),
+    UpgradeChoice("electroelf", "Electroelf", "Familier qui lance des eclairs"),
     UpgradeChoice("fire_ring","EVO: Cercle de feu+","Debloque le cercle de feu",
     ),
 ]
@@ -2548,6 +2609,7 @@ class Game:
         self.class_choices = []
         self.selected_class: Optional[ClassChoice] = None
         self.selected_ultimate_key = "singularity"
+        self.ultimate_boss_boost = 0
         self.ui_icons = self.load_ui_icons()
         self.upgrade_icons = self.load_upgrade_icons()
         self.reset_game()
@@ -2957,6 +3019,7 @@ class Game:
         self.boss_death_timer = 0.0
         self.selected_class = None
         self.selected_ultimate_key = "singularity"
+        self.ultimate_boss_boost = 0
         self.spawn_wave(self.wave)
         self.prepare_class_choices()
         self.state = "class_select"
@@ -3295,6 +3358,7 @@ class Game:
         self.explosions.append(Explosion(bx, by, 90, duration=0.45))
         gem_count = self.wave * self.wave + 30
         self.spawn_gems(bx, by, count=gem_count, amount=1, spread=60)
+        self.ultimate_boss_boost += 1
         self.wave_killed = self.wave_total
         self.boss_death_timer = 0.8
         self.state = "boss_death"
@@ -3387,6 +3451,12 @@ class Game:
     def ultimate_cadence_multiplier(self):
         return clamp(0.9 / max(0.08, self.player.fire_rate), 1.0, 2.0)
 
+    def ultimate_boss_level(self):
+        return max(0, int(self.ultimate_boss_boost))
+
+    def ultimate_damage_scale(self, per_level=0.14, cap=5.0):
+        return min(cap, 1.0 + self.ultimate_boss_level() * per_level)
+
     def player_projectile_damage_value(self):
         dmg_mult = 1.4 if self.player.haste > 0 else 1.0
         if self.player.vector_overdrive_time > 0:
@@ -3395,17 +3465,87 @@ class Game:
 
     def constellation_node_count(self):
         bullets_level = self.upgrade_level("bullets")
-        return int(clamp(4 + bullets_level // 3, 4, 12))
+        return int(clamp(4 + bullets_level // 3 + self.ultimate_boss_level(), 4, 20))
 
     def constellation_tick_interval(self):
         cadence_level = self.upgrade_level("fire_rate")
-        return max(0.06, 0.1 - cadence_level * 0.0015)
+        return max(0.035, 0.1 - cadence_level * 0.0015 - self.ultimate_boss_level() * 0.0025)
 
     def constellation_duration(self):
         speed_level = self.upgrade_level("speed")
         bullets_level = self.upgrade_level("bullets")
         bonus = min(2.0, bullets_level * 0.05 + speed_level * 0.02)
+        bonus += min(3.0, self.ultimate_boss_level() * 0.18)
         return 10.0 + bonus
+
+    def prismatic_blade_duration(self):
+        return 5.2 + min(2.4, self.ultimate_boss_level() * 0.24)
+
+    def prismatic_blade_tick_interval(self):
+        return max(0.055, 0.12 - self.ultimate_boss_level() * 0.004)
+
+    def prismatic_blade_count(self):
+        return int(min(6, 3 + self.ultimate_boss_level() // 3))
+
+    def prismatic_blade_width(self):
+        return int(min(56, 30 + self.ultimate_boss_level() * 1.5))
+
+    def vector_overdrive_duration(self):
+        return 8.0 + min(4.0, self.ultimate_boss_level() * 0.4)
+
+    def vector_overdrive_tick_interval(self):
+        return max(0.1, 0.24 - self.ultimate_boss_level() * 0.005)
+
+    def vector_overdrive_max_targets(self):
+        return int(min(14, 5 + self.ultimate_boss_level() // 2))
+
+    def vector_overdrive_range(self):
+        return min(760.0, 430.0 + self.ultimate_boss_level() * 20.0)
+
+    def spectral_swarm_duration(self):
+        return 8.0 + min(4.0, self.ultimate_boss_level() * 0.35)
+
+    def spectral_swarm_spawn_interval(self):
+        return max(0.045, 0.1 - self.ultimate_boss_level() * 0.003)
+
+    def spectral_swarm_shard_lifetime(self):
+        return 3.4 + min(2.0, self.ultimate_boss_level() * 0.18)
+
+    def spectral_swarm_shard_speed_bonus(self):
+        return min(180.0, self.ultimate_boss_level() * 12.0)
+
+    def fractal_prism_duration(self):
+        return 9.0 + min(4.0, self.ultimate_boss_level() * 0.4)
+
+    def fractal_prism_tick_interval(self):
+        return max(0.075, 0.16 - self.ultimate_boss_level() * 0.0035)
+
+    def fractal_prism_max_targets(self):
+        return int(min(15, 6 + self.ultimate_boss_level() // 2))
+
+    def fractal_prism_range(self):
+        return min(760.0, 430.0 + self.ultimate_boss_level() * 24.0)
+
+    def fractal_prism_jump_range(self):
+        return min(600.0, 320.0 + self.ultimate_boss_level() * 16.0)
+
+    def singularity_duration(self):
+        return 6.0 + min(4.0, self.ultimate_boss_level() * 0.35)
+
+    def singularity_radius(self):
+        return int(min(520.0, 300.0 + self.ultimate_boss_level() * 14.0))
+
+    def singularity_tick_interval(self):
+        return max(0.08, 0.18 - self.ultimate_boss_level() * 0.0035)
+
+    def singularity_pull_strength(self):
+        return min(1100.0, 520.0 + self.ultimate_boss_level() * 40.0)
+
+    def singularity_orbit_radius(self):
+        return min(320.0, 190.0 + self.ultimate_boss_level() * 8.0)
+
+    def singularity_orbit_speed(self):
+        return min(3.0, 1.9 + self.ultimate_boss_level() * 0.04)
 
     def try_activate_ultimate(self):
         if self.player.ultimate_charge < self.player.ultimate_max:
@@ -3463,6 +3603,8 @@ class Game:
             margin=120,
             preferred_points=preferred_points,
         )
+        constellation.beam_width = min(20, 8 + self.ultimate_boss_level() * 0.35)
+        constellation.node_move_speed = min(220.0, 72.0 + self.ultimate_boss_level() * 8.0)
         self.ultimate_constellations.append(constellation)
         self.ultimate_pulses.append(UltimatePulse(self.player.x, self.player.y, 120, duration=0.28))
         cx, cy = constellation.center()
@@ -3472,16 +3614,25 @@ class Game:
         sx, sy = self.player.x, self.player.y
         angle = math.atan2(target_pos[1] - sy, target_pos[0] - sx)
         self.player.ultimate_charge = 0
-        self.player.ultimate_beam_time = 5.2
+        self.player.ultimate_beam_time = self.prismatic_blade_duration()
         self.player.ultimate_cooldown = 0.0
         self._clear_ultimate_effects()
-        blade = UltimatePrismaticBlade(sx, sy, start_angle=angle, duration=self.player.ultimate_beam_time)
+        blade = UltimatePrismaticBlade(
+            sx,
+            sy,
+            start_angle=angle,
+            duration=self.player.ultimate_beam_time,
+            tick_interval=self.prismatic_blade_tick_interval(),
+            blade_count=self.prismatic_blade_count(),
+            beam_width=self.prismatic_blade_width(),
+        )
+        blade.total_sword_length = min(WIDTH * 0.74, WIDTH * 0.5 + self.ultimate_boss_level() * 36.0)
         self.ultimate_prismatic_blades.append(blade)
         self.ultimate_pulses.append(UltimatePulse(sx, sy, 130, duration=0.26))
 
     def _activate_vector_overdrive_ultimate(self):
         self.player.ultimate_charge = 0
-        self.player.ultimate_beam_time = 8.0
+        self.player.ultimate_beam_time = self.vector_overdrive_duration()
         self.player.ultimate_cooldown = 0.0
         self._clear_ultimate_effects()
         self.player.vector_overdrive_time = self.player.ultimate_beam_time
@@ -3489,20 +3640,22 @@ class Game:
             self.player.x,
             self.player.y,
             duration=self.player.ultimate_beam_time,
+            tick_interval=self.vector_overdrive_tick_interval(),
+            max_targets=self.vector_overdrive_max_targets(),
         )
         self.ultimate_vector_overdrives.append(overdrive)
         self.ultimate_pulses.append(UltimatePulse(self.player.x, self.player.y, 145, duration=0.28))
 
     def _activate_spectral_swarm_ultimate(self):
         self.player.ultimate_charge = 0
-        self.player.ultimate_beam_time = 8.0
+        self.player.ultimate_beam_time = self.spectral_swarm_duration()
         self.player.ultimate_cooldown = 0.0
         self._clear_ultimate_effects()
         swarm = UltimateSpectralSwarm(
             self.player.x,
             self.player.y,
             duration=self.player.ultimate_beam_time,
-            spawn_interval=0.1,
+            spawn_interval=self.spectral_swarm_spawn_interval(),
         )
         self.ultimate_spectral_swarms.append(swarm)
         self.ultimate_pulses.append(UltimatePulse(self.player.x, self.player.y, 140, duration=0.28))
@@ -3521,10 +3674,19 @@ class Game:
             tx = px + dx * scale
             ty = py + dy * scale
         self.player.ultimate_charge = 0
-        self.player.ultimate_beam_time = 9.0
+        self.player.ultimate_beam_time = self.fractal_prism_duration()
         self.player.ultimate_cooldown = 0.0
         self._clear_ultimate_effects()
-        prism = UltimateFractalPrism(tx, ty, duration=self.player.ultimate_beam_time)
+        prism = UltimateFractalPrism(
+            tx,
+            ty,
+            duration=self.player.ultimate_beam_time,
+            tick_interval=self.fractal_prism_tick_interval(),
+            max_targets=self.fractal_prism_max_targets(),
+            range_radius=int(self.fractal_prism_range()),
+            jump_range=int(self.fractal_prism_jump_range()),
+        )
+        prism.move_speed = min(340.0, prism.move_speed + self.ultimate_boss_level() * 8.0)
         self.ultimate_fractal_prisms.append(prism)
         self.ultimate_pulses.append(UltimatePulse(self.player.x, self.player.y, 120, duration=0.24))
         self.ultimate_pulses.append(UltimatePulse(tx, ty, 150, duration=0.3))
@@ -3535,20 +3697,22 @@ class Game:
         ty = clamp(ty, 40, HEIGHT - 40)
         px, py = self.player.x, self.player.y
         ang = math.atan2(ty - py, tx - px)
-        orbit_radius = 190.0
+        orbit_radius = self.singularity_orbit_radius()
         sx = px + math.cos(ang) * orbit_radius
         sy = py + math.sin(ang) * orbit_radius
         self.player.ultimate_charge = 0
-        self.player.ultimate_beam_time = 6.0
+        self.player.ultimate_beam_time = self.singularity_duration()
         self.player.ultimate_cooldown = 0.0
         self._clear_ultimate_effects()
         singularity = UltimateSingularity(
             sx,
             sy,
-            radius=300,
+            radius=self.singularity_radius(),
             duration=self.player.ultimate_beam_time,
+            tick_interval=self.singularity_tick_interval(),
+            pull_strength=self.singularity_pull_strength(),
             orbit_radius=orbit_radius,
-            orbit_speed=1.9,
+            orbit_speed=self.singularity_orbit_speed(),
             start_angle=ang,
         )
         self.ultimate_singularities.append(singularity)
@@ -3984,10 +4148,20 @@ class Game:
                 self.ultimate_zones.remove(zone)
 
         for constellation in list(self.ultimate_constellations):
-            constellation.update(dt)
+            constellation_targets = list(self.enemies)
+            if self.boss is not None:
+                constellation_targets.append(self.boss)
+            constellation.update(dt, constellation_targets)
             if constellation.should_tick():
-                tick_damage = self.player.damage * 0.35 * self.ultimate_cadence_multiplier()
-                beam_hit_radius = constellation.beam_width * 0.5
+                tick_damage = (
+                    self.player.damage
+                    * 0.35
+                    * self.ultimate_cadence_multiplier()
+                    * self.ultimate_damage_scale(0.16, cap=5.8)
+                )
+                beam_hit_radius = constellation.beam_width * (
+                    0.5 + min(0.26, self.ultimate_boss_level() * 0.02)
+                )
                 hit_enemies = set()
                 boss_hit = False
                 for (sx, sy), (ex, ey) in constellation.segments():
@@ -4021,8 +4195,10 @@ class Game:
                 singularity.pull_entity(self.boss, dt, weight=0.25)
 
             if singularity.should_tick():
-                tick_damage = self.player.damage * 0.55 + self.wave * 1.8
-                center_bonus = 1.35
+                tick_damage = (
+                    self.player.damage * 0.55 + self.wave * 1.8
+                ) * self.ultimate_damage_scale(0.16, cap=5.5)
+                center_bonus = 1.35 + min(0.5, self.ultimate_boss_level() * 0.02)
                 for enemy in list(self.enemies):
                     d = distance((enemy.x, enemy.y), (singularity.x, singularity.y))
                     if d <= singularity.radius:
@@ -4037,7 +4213,9 @@ class Game:
                         self.damage_boss(damage)
 
             if singularity.time_left <= 0:
-                collapse_damage = self.player.damage * 5.0 + self.wave * 6.0
+                collapse_damage = (
+                    self.player.damage * 5.0 + self.wave * 6.0
+                ) * self.ultimate_damage_scale(0.2, cap=7.0)
                 self.ultimate_pulses.append(
                     UltimatePulse(
                         singularity.x,
@@ -4057,8 +4235,10 @@ class Game:
         for blade in list(self.ultimate_prismatic_blades):
             blade.update(dt, (self.player.x, self.player.y))
             if blade.should_tick():
-                touch_damage = self.player_projectile_damage_value() * 4.0
-                hit_radius = blade.beam_width * 0.52
+                touch_damage = self.player_projectile_damage_value() * (
+                    4.0 + min(10.0, self.ultimate_boss_level() * 0.9)
+                )
+                hit_radius = blade.beam_width * (0.52 + min(0.26, self.ultimate_boss_level() * 0.015))
                 hit_enemies = set()
                 boss_hit = False
                 for (sx, sy), (ex, ey) in blade.segments():
@@ -4091,14 +4271,17 @@ class Game:
                 for target in targets:
                     if len(chained) >= overdrive.max_targets:
                         break
-                    if distance((target.x, target.y), (self.player.x, self.player.y)) <= 430:
+                    if distance((target.x, target.y), (self.player.x, self.player.y)) <= self.vector_overdrive_range():
                         chained.append(target)
                 if chained:
                     chain_points = [(self.player.x, self.player.y)]
-                    base_damage = self.player.damage * 0.8 + self.wave * 0.8
+                    base_damage = (
+                        self.player.damage * 0.8 + self.wave * 0.8
+                    ) * self.ultimate_damage_scale(0.13, cap=4.8)
+                    chain_decay = min(0.97, 0.88 + self.ultimate_boss_level() * 0.006)
                     for i, target in enumerate(chained):
                         chain_points.append((target.x, target.y))
-                        dmg = base_damage * (0.88 ** i)
+                        dmg = base_damage * (chain_decay ** i)
                         if self.boss is not None and target is self.boss:
                             self.damage_boss(dmg * 0.75)
                         else:
@@ -4115,11 +4298,21 @@ class Game:
             for _ in range(spawn_count):
                 ex, ey = swarm.emit_point()
                 angle = random.uniform(0.0, math.tau)
-                speed = random.uniform(420.0, 540.0)
-                damage = self.player.damage * 1.22 + self.wave * 0.35
-                self.ultimate_spectral_shards.append(
-                    UltimateSpectralShard(ex, ey, angle, speed, damage, lifetime=3.4)
+                speed_bonus = self.spectral_swarm_shard_speed_bonus()
+                speed = random.uniform(420.0 + speed_bonus, 540.0 + speed_bonus)
+                damage = (
+                    self.player.damage * 1.22 + self.wave * 0.35
+                ) * self.ultimate_damage_scale(0.14, cap=5.0)
+                shard = UltimateSpectralShard(
+                    ex,
+                    ey,
+                    angle,
+                    speed,
+                    damage,
+                    lifetime=self.spectral_swarm_shard_lifetime(),
                 )
+                shard.turn_rate = min(12.0, shard.turn_rate + self.ultimate_boss_level() * 0.25)
+                self.ultimate_spectral_shards.append(shard)
             if swarm.time_left <= 0:
                 self.ultimate_pulses.append(UltimatePulse(self.player.x, self.player.y, 140, duration=0.22))
                 self.ultimate_spectral_swarms.remove(swarm)
@@ -4184,10 +4377,13 @@ class Game:
                             visited.add(next_target)
 
                         points = [(prism.x, prism.y)]
-                        base_damage = self.player.damage * 1.45 + self.wave * 0.9
+                        base_damage = (
+                            self.player.damage * 1.45 + self.wave * 0.9
+                        ) * self.ultimate_damage_scale(0.14, cap=5.2)
+                        chain_decay = min(0.95, 0.84 + self.ultimate_boss_level() * 0.005)
                         for i, target in enumerate(chain):
                             points.append((target.x, target.y))
-                            dmg = base_damage * (0.84 ** i)
+                            dmg = base_damage * (chain_decay ** i)
                             if self.boss is not None and target is self.boss:
                                 self.damage_boss(dmg * 0.76)
                             else:
@@ -4955,7 +5151,7 @@ class Game:
             if self.state in ("playing", "wave_clear", "boss_death"):
                 self.update(dt)
 
-            if self.player.hp <= 0:
+            if self.player.hp <= 0 and self.state != "game_over":
                 self.state = "game_over"
                 self.build_game_over_buttons()
 
