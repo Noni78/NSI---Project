@@ -422,20 +422,20 @@ class Enemy:
         self.beam_width = 14
         self.neon_phase = random.uniform(0.0, math.tau)
         self.neon_flicker = random.uniform(2.3, 3.6)
-
+        
         if kind == "fast":
             self.speed *= 3.0
-            self.max_hp = 20 + wave * 6
+            self.max_hp = 20 + wave * 8
         elif kind == "tank":
             self.speed *= 0.65
-            self.max_hp = 75 + wave * 12
+            self.max_hp = 75 + wave * 24
             self.beam_timer = 2.0
         elif kind == "shooter":
             self.speed *= 0.9
-            self.max_hp = 30 + wave * 8
+            self.max_hp = 30 + wave * 16
             self.shoot_cooldown = random.uniform(0.2, 0.8)
         else:
-            self.max_hp = 25 + wave * 6
+            self.max_hp = 25 + wave * 12
 
         style = Enemy.STYLE.get(kind, Enemy.STYLE["basic"])
         self.shape = style["shape"]
@@ -622,7 +622,7 @@ class Enemy:
                     self.y,
                     sx * (220 + wave * 6),
                     sy * (220 + wave * 6),
-                    damage=10 + wave * 0.35,
+                    damage=14 + wave * 0.7,
                     color=RED,
                     radius=4,
                     owner="enemy",
@@ -1184,10 +1184,10 @@ class Player:
             self.fire_timer *= 0.62
         angle = math.atan2(target_pos[1] - self.y, target_pos[0] - self.x)
 
-        pickup_bonus = 6 if self.multishot > 0 else 0
+        pickup_bonus = 1.8 if self.multishot > 0 else 0
         if overdrive_on:
             pickup_bonus += 2
-        shots = clamp(self.bullets_per_shot + pickup_bonus, 1, 80)
+        shots = int(clamp(self.bullets_per_shot + int(pickup_bonus*self.bullets_per_shot ), 1, 80))
         max_spread = 0.35 + (shots / 80) * 0.95
         if shots == 1:
             offsets = [0.0]
@@ -2326,9 +2326,6 @@ class UltimateSingularity:
             return True
         return False
 
-    def contains(self, x, y):
-        return distance((x, y), (self.x, self.y)) <= self.radius
-
     def pull_entity(self, entity, dt, weight=1.0):
         dx = self.x - entity.x
         dy = self.y - entity.y
@@ -2378,12 +2375,13 @@ class UltimateSingularity:
 
 
 class Shockwave:
-    def __init__(self, x, y, radius, duration=0.35):
+    def __init__(self, x, y, radius, duration=0.42):
         self.x = x
         self.y = y
         self.radius = radius
         self.duration = duration
         self.time_left = duration
+        self.spin = random.uniform(0.0, math.tau)
 
     def update(self, dt):
         self.time_left -= dt
@@ -2391,13 +2389,80 @@ class Shockwave:
     def draw(self, screen):
         if self.time_left <= 0:
             return
-        t = 1.0 - (self.time_left / self.duration)
-        r = int(self.radius * t)
-        alpha = int(200 * (1.0 - t))
-        surf = pygame.Surface((r * 2 + 8, r * 2 + 8), pygame.SRCALPHA)
-        pygame.draw.circle(surf, (120, 220, 255, alpha), (r + 4, r + 4), r, 6)
-        pygame.draw.circle(surf, (180, 240, 255, alpha), (r + 4, r + 4), max(2, r // 6), 2)
-        screen.blit(surf, (int(self.x - r - 4), int(self.y - r - 4)))
+        progress = clamp(1.0 - (self.time_left / max(0.001, self.duration)), 0.0, 1.0)
+        eased = 1.0 - (1.0 - progress) ** 2
+        fade = 1.0 - progress
+        ring_r = max(2, int(self.radius * eased))
+        size = ring_r * 2 + 120
+        surf = pygame.Surface((size, size), pygame.SRCALPHA)
+        center = (size // 2, size // 2)
+
+        for extra, alpha, width in ((34, 38, 11), (22, 70, 8), (10, 110, 5)):
+            rr = ring_r + extra
+            pygame.draw.circle(
+                surf,
+                (80, 210, 255, int(alpha * fade + 10)),
+                center,
+                rr,
+                width,
+            )
+
+        ring_width = max(3, int(10 - progress * 6))
+        pygame.draw.circle(
+            surf,
+            (145, 232, 255, int(225 * fade + 20)),
+            center,
+            ring_r,
+            ring_width,
+        )
+        pygame.draw.circle(
+            surf,
+            (255, 255, 255, int(235 * fade + 20)),
+            center,
+            max(2, ring_r - 3),
+            2,
+        )
+
+        inner_r = max(8, int(self.radius * (0.08 + 0.2 * (1.0 - progress))))
+        pygame.draw.circle(surf, (36, 80, 120, int(95 * fade + 16)), center, inner_r)
+        pygame.draw.circle(
+            surf,
+            (210, 246, 255, int(198 * fade + 18)),
+            center,
+            max(2, inner_r // 2),
+        )
+
+        spoke_count = 14
+        spoke_start = max(6, int(ring_r * 0.18))
+        for i in range(spoke_count):
+            ang = self.spin + progress * 7.0 + i * (math.tau / spoke_count)
+            sx = center[0] + math.cos(ang) * spoke_start
+            sy = center[1] + math.sin(ang) * spoke_start
+            end_r = max(
+                spoke_start + 8,
+                int(ring_r * (0.7 + 0.18 * math.sin(progress * 11.0 + i * 0.9))),
+            )
+            ex = center[0] + math.cos(ang) * end_r
+            ey = center[1] + math.sin(ang) * end_r
+            pygame.draw.line(
+                surf,
+                (120, 230, 255, int(90 * fade + 20)),
+                (int(sx), int(sy)),
+                (int(ex), int(ey)),
+                2,
+            )
+
+        if progress < 0.45:
+            flare_ratio = (0.45 - progress) / 0.45
+            flare_r = max(ring_r + 18, int(self.radius * (0.25 + 0.55 * progress)))
+            pygame.draw.circle(
+                surf,
+                (95, 220, 255, int(40 * flare_ratio + 10)),
+                center,
+                flare_r,
+            )
+
+        screen.blit(surf, (int(self.x - center[0]), int(self.y - center[1])))
 
 
 class ElectroElf:
@@ -3182,7 +3247,7 @@ class Game:
         self.enemies.clear()
         self.boss = None
         self.boss_zones.clear()
-        total = 14 + int(wave * 2.2)
+        total = 18 + int(wave * 3.0)
         self.wave_total = total
         self.wave_killed = 0
         initial_count = max(1, int(total * 0.5))
@@ -3421,10 +3486,10 @@ class Game:
         self.state = "boss_death"
 
     def boss_attack_damage(self):
-        return 18 + self.wave * 1.8
+        return 24 + self.wave * 2.4
 
     def boss_contact_damage(self):
-        return self.boss_attack_damage() * 0.35
+        return self.boss_attack_damage() * 0.45
 
     def get_damage_font(self, size):
         size = int(clamp(size, 16, 72))
@@ -3827,6 +3892,42 @@ class Game:
         radius = self.shockwave_radius_value()
         damage = self.shockwave_damage_value()
         self.shockwaves.append(Shockwave(self.player.x, self.player.y, radius))
+        self.pulse_effects.append(
+            PulseEffect(
+                self.player.x,
+                self.player.y,
+                color=(120, 225, 255),
+                start_radius=18,
+                end_radius=int(max(46, radius * 0.55)),
+                duration=0.18,
+                width=6,
+                fill_alpha=95,
+            )
+        )
+        self.pulse_effects.append(
+            PulseEffect(
+                self.player.x,
+                self.player.y,
+                color=(130, 235, 255),
+                start_radius=24,
+                end_radius=int(max(72, radius * 0.82)),
+                duration=0.3,
+                width=7,
+                fill_alpha=62,
+            )
+        )
+        self.pulse_effects.append(
+            PulseEffect(
+                self.player.x,
+                self.player.y,
+                color=(230, 248, 255),
+                start_radius=12,
+                end_radius=int(max(32, radius * 0.38)),
+                duration=0.12,
+                width=3,
+                fill_alpha=120,
+            )
+        )
         for enemy in list(self.enemies):
             dist = distance((enemy.x, enemy.y), (self.player.x, self.player.y))
             if dist <= radius:
@@ -3836,63 +3937,6 @@ class Game:
             if dist <= radius:
                 self.damage_boss(damage)
         return True
-
-    def fire_ultimate_beam(self, target_pos):
-        if not self.player.can_fire():
-            return
-        self.player.fire_timer = 0.18 if self.player.haste > 0 else 0.22
-        sx, sy = self.player.x, self.player.y
-        base_angle = math.atan2(target_pos[1] - sy, target_pos[0] - sx)
-        level = max(0, int((self.player.bullets_per_shot - 1) / 2))
-        pickup_bonus = 1 if self.player.multishot > 0 else 0
-        beams = int(clamp(1 + level + pickup_bonus, 1, 12))
-        max_spread = 0.35 + (beams / 80) * 0.95
-        if beams == 1:
-            offsets = [0.0]
-        else:
-            step = (2 * max_spread) / (beams - 1)
-            offsets = [(-max_spread + i * step) for i in range(beams)]
-            if not any(abs(off) <= 1e-6 for off in offsets):
-                center_idx = min(range(len(offsets)), key=lambda i: abs(offsets[i]))
-                offsets[center_idx] = 0.0
-
-        base_dist = math.hypot(target_pos[0] - sx, target_pos[1] - sy) or 1.0
-        beam_width = 8
-
-        for offset in offsets:
-            ang = base_angle + offset
-            ex = sx + math.cos(ang) * base_dist
-            ey = sy + math.sin(ang) * base_dist
-            self.ultimate_beams.append(UltimateBeam((sx, sy), (ex, ey)))
-
-            dx = ex - sx
-            dy = ey - sy
-            seg_len = math.hypot(dx, dy) or 1.0
-            dir_x = dx / seg_len
-            dir_y = dy / seg_len
-            best_proj = None
-            impact_pos = None
-
-            def consider_target(tx, ty, radius):
-                nonlocal best_proj, impact_pos
-                vx = tx - sx
-                vy = ty - sy
-                proj = vx * dir_x + vy * dir_y
-                if proj < 0 or proj > seg_len:
-                    return
-                perp = abs(vx * dir_y - vy * dir_x)
-                if perp <= radius + beam_width:
-                    if best_proj is None or proj < best_proj:
-                        best_proj = proj
-                        impact_pos = (tx, ty)
-
-            for enemy in self.enemies:
-                consider_target(enemy.x, enemy.y, enemy.radius)
-            if self.boss is not None:
-                consider_target(self.boss.x, self.boss.y, self.boss.radius)
-
-            if impact_pos is not None:
-                self.ultimate_zones.append(UltimateZone(impact_pos[0], impact_pos[1]))
 
     def handle_collisions(self):
         for proj in list(self.projectiles):
@@ -3909,13 +3953,13 @@ class Game:
                         self.projectiles.remove(proj)
             else:
                 if distance((proj.x, proj.y), (self.player.x, self.player.y)) < proj.radius + self.player.radius:
-                    self.damage_player(10)
+                    self.damage_player(max(8, proj.damage))
                     if proj in self.projectiles:
                         self.projectiles.remove(proj)
 
         for enemy in self.enemies:
             if distance((enemy.x, enemy.y), (self.player.x, self.player.y)) < enemy.radius + self.player.radius:
-                contact_damage = max(5, int(self.player.max_hp * 0.06))
+                contact_damage = max(7, int(self.player.max_hp * 0.075))
                 self.damage_player(contact_damage)
 
         if self.boss is not None:
@@ -4151,7 +4195,7 @@ class Game:
         for enemy in self.enemies:
             enemy.update(dt, (self.player.x, self.player.y), self.projectiles, self.wave)
             if enemy.kind == "tank" and enemy.beam_hits_player((self.player.x, self.player.y)):
-                self.damage_player(20)
+                self.damage_player(22 + self.wave * 0.4)
 
         for enemy in list(self.enemies):
             if enemy.hp <= 0:
@@ -4593,6 +4637,56 @@ class Game:
             self.screen.blit(shadow, (x + 1, y + 1))
             self.screen.blit(label, (x, y))
 
+        def draw_tag(text, center_x, y, color=(120, 220, 255), ready=False):
+            ticks = pygame.time.get_ticks() * 0.001
+            pulse = 0.5 + 0.5 * math.sin(ticks * 7.4)
+            label = self.font.render(text, True, (232, 247, 255))
+            pad_x = 11
+            pad_y = 3
+            rect = pygame.Rect(0, 0, label.get_width() + pad_x * 2, label.get_height() + pad_y * 2)
+            rect.centerx = int(center_x)
+            rect.y = int(y)
+
+            glow = pygame.Surface((rect.width + 20, rect.height + 16), pygame.SRCALPHA)
+            glow_alpha = 24 + int(18 * pulse)
+            if ready:
+                glow_alpha += 28
+            pygame.draw.rect(
+                glow,
+                (color[0], color[1], color[2], glow_alpha),
+                glow.get_rect(),
+                border_radius=12,
+            )
+            pygame.draw.rect(
+                glow,
+                (color[0], color[1], color[2], max(8, glow_alpha // 2)),
+                glow.get_rect().inflate(-6, -4),
+                border_radius=10,
+            )
+            self.screen.blit(glow, (rect.x - 10, rect.y - 8))
+
+            body = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
+            body_color = (8, 14, 26, 230) if not ready else (10, 18, 30, 240)
+            border_alpha = 170 if not ready else 220
+            pygame.draw.rect(body, body_color, body.get_rect(), border_radius=10)
+            pygame.draw.rect(
+                body,
+                (color[0], color[1], color[2], border_alpha),
+                body.get_rect(),
+                2,
+                border_radius=10,
+            )
+            highlight = pygame.Rect(3, 2, body.get_width() - 6, max(3, body.get_height() // 3))
+            pygame.draw.rect(body, (255, 255, 255, 28), highlight, border_radius=8)
+            self.screen.blit(body, rect.topleft)
+
+            shadow = self.font.render(text, True, (10, 14, 24))
+            self.screen.blit(
+                shadow,
+                (rect.centerx - shadow.get_width() / 2 + 1, rect.y + pad_y + 1),
+            )
+            self.screen.blit(label, (rect.centerx - label.get_width() / 2, rect.y + pad_y))
+
         margin = 16
         top_y = 12
 
@@ -4650,10 +4744,12 @@ class Game:
             wave_label = f"Vague {self.wave}"
             wave_fill = (120, 220, 255)
         draw_bar(wave_bar_x, wave_bar_y, wave_bar_w, wave_bar_h, wave_ratio, wave_fill)
-        wave_text = self.font.render(wave_label, True, text_main)
-        self.screen.blit(
-            wave_text,
-            (wave_rect.centerx - wave_text.get_width() / 2, wave_rect.y + 2),
+        draw_tag(
+            wave_label,
+            wave_rect.centerx,
+            wave_rect.y - 10,
+            color=wave_fill,
+            ready=self.boss is not None,
         )
 
         # Score panel #
@@ -4661,10 +4757,11 @@ class Game:
         score_h = 40
         score_rect = pygame.Rect(WIDTH - score_w - margin, top_y, score_w, score_h)
         draw_panel(score_rect)
-        score_text = self.font.render(f"SCORE {self.score}", True, text_main)
-        self.screen.blit(
-            score_text,
-            (score_rect.centerx - score_text.get_width() / 2, score_rect.y + 10),
+        draw_tag(
+            f"SCORE {self.score}",
+            score_rect.centerx,
+            score_rect.y + 6,
+            color=(120, 220, 255),
         )
 
         # Buff panel #
@@ -4746,8 +4843,13 @@ class Game:
         ult_ratio = clamp(self.player.ultimate_charge / max(1, self.player.ultimate_max), 0, 1)
         ult_color = (170, 240, 255) if ult_ratio >= 1 else (95, 145, 175)
         draw_bar(ult_rect.x + 12, ult_rect.y + 12, ult_w - 24, 10, ult_ratio, ult_color)
-        ult_label = self.font.render("ULT (A)", True, text_main)
-        self.screen.blit(ult_label, (ult_rect.centerx - ult_label.get_width() / 2, ult_rect.y - 8))
+        draw_tag(
+            "ULT (A)",
+            ult_rect.centerx,
+            ult_rect.y - 24,
+            color=(170, 240, 255) if ult_ratio >= 1 else (106, 170, 205),
+            ready=ult_ratio >= 1 and self.player.ultimate_cooldown <= 0,
+        )
         # Ultimate cooldown display
         if self.player.ultimate_cooldown > 0:
             cooldown_text = self.font.render(f"{self.player.ultimate_cooldown:.1f}", True, text_soft)
@@ -4771,10 +4873,12 @@ class Game:
             shock_ratio,
             (120, 220, 255),
         )
-        shock_label = self.font.render("ONDE (E)", True, text_main)
-        self.screen.blit(
-            shock_label,
-            (shock_rect.centerx - shock_label.get_width() / 2, shock_rect.y - 8),
+        draw_tag(
+            "ONDE (E)",
+            shock_rect.centerx,
+            shock_rect.y - 24,
+            color=(120, 220, 255),
+            ready=shock_ratio >= 1.0,
         )
 
     def draw_cheat_buttons(self):
