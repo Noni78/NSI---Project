@@ -719,7 +719,7 @@ class Boss:
     def __init__(self, wave):
         self.x = WIDTH / 2
         self.y = HEIGHT * 0.18
-        self.max_hp = 1200 + wave * 450
+        self.max_hp = 1200 + wave * 4500
         self.hp = self.max_hp
         self.radius = 42
         self.speed = 70 * 0.65
@@ -1005,6 +1005,7 @@ class Player:
         self.fire_rate = 0.9
         self.fire_timer = 0.0
         self.bullets_per_shot = 1
+        self.even_spread_flip = False
         self.shield = 0.0
         self.invincible = 0.0
         self.multishot = 0.0
@@ -1187,10 +1188,27 @@ class Player:
         pickup_bonus = 1.8 if self.multishot > 0 else 0
         if overdrive_on:
             pickup_bonus += 2
-        shots = int(clamp(self.bullets_per_shot + int(pickup_bonus*self.bullets_per_shot ), 1, 80))
+        shots = int(clamp(self.bullets_per_shot + int(pickup_bonus * self.bullets_per_shot), 1, 10))
         max_spread = 0.35 + (shots / 80) * 0.95
         if shots == 1:
             offsets = [0.0]
+        elif shots % 2 == 0:
+            # Even shot count: force exactly one center bullet, then spread others around it.
+            half = shots // 2
+            if self.even_spread_flip:
+                left_count = half
+                right_count = half - 1
+            else:
+                left_count = half - 1
+                right_count = half
+            offsets = [0.0]
+            if left_count > 0:
+                for i in range(1, left_count + 1):
+                    offsets.append(-max_spread * i / left_count)
+            if right_count > 0:
+                for i in range(1, right_count + 1):
+                    offsets.append(max_spread * i / right_count)
+            self.even_spread_flip = not self.even_spread_flip
         else:
             step = (2 * max_spread) / (shots - 1)
             offsets = [(-max_spread + i * step) for i in range(shots)]
@@ -1779,10 +1797,36 @@ class UltimateConstellation:
 
         for idx, (x, y) in enumerate(self.nodes):
             twinkle = 0.5 + 0.5 * math.sin(t * 5.0 + idx * 0.9)
-            r = 5 + int(2 * twinkle)
-            pygame.draw.circle(surf, (95, 225, 255, 80), (int(x), int(y)), r + 8)
-            pygame.draw.circle(surf, (175, 242, 255, 230), (int(x), int(y)), r)
-            pygame.draw.circle(surf, (255, 255, 255, 220), (int(x), int(y)), max(2, r // 2))
+            beacon_phase = t * (2.0 + idx * 0.07)
+            r = 6 + int(2 * twinkle)
+
+            # Base aura
+            pygame.draw.circle(surf, (90, 220, 255, 75), (int(x), int(y)), r + 11)
+            pygame.draw.circle(surf, (165, 236, 255, 52), (int(x), int(y)), r + 16, 3)
+
+            # Rotating beacon frames
+            outer = Enemy._regular_polygon((x, y), r + 9, 4, beacon_phase + math.pi / 4)
+            inner = Enemy._regular_polygon((x, y), r + 4, 4, -beacon_phase * 1.2 + math.pi / 4)
+            pygame.draw.polygon(surf, (110, 220, 255, 150), outer, 2)
+            pygame.draw.polygon(surf, (215, 245, 255, 190), inner, 2)
+
+            # Small pylon silhouette for a clearer "balise" shape
+            top = (int(x), int(y - (r + 6)))
+            left = (int(x - max(4, r * 0.55)), int(y + max(3, r * 0.35)))
+            right = (int(x + max(4, r * 0.55)), int(y + max(3, r * 0.35)))
+            pygame.draw.polygon(surf, (14, 32, 55, 200), [top, right, left])
+            pygame.draw.polygon(surf, (95, 195, 245, 185), [top, right, left], 2)
+
+            # Core emitter
+            pygame.draw.circle(surf, (180, 242, 255, 235), (int(x), int(y)), r)
+            pygame.draw.circle(surf, (255, 255, 255, 235), (int(x), int(y)), max(2, r // 2))
+            pygame.draw.line(
+                surf,
+                (205, 245, 255, 180),
+                (int(x), int(y - r - 6)),
+                (int(x), int(y + r + 4)),
+                2,
+            )
 
         screen.blit(surf, (0, 0))
 
@@ -2196,10 +2240,13 @@ class UltimateFractalPrism:
         self.target = None
         self.retarget_timer = 0.0
         self.hover_distance = 110.0
+        self.facing_angle = random.uniform(0.0, math.tau)
+        self.visual_radius = 34
 
     def update(self, dt, targets=None):
         if targets is None:
             targets = []
+        old_x, old_y = self.x, self.y
         self.time_left -= dt
         self.tick_timer -= dt
         self.retarget_timer -= dt
@@ -2243,6 +2290,16 @@ class UltimateFractalPrism:
         self.x = clamp(self.x, 40, WIDTH - 40)
         self.y = clamp(self.y, 40, HEIGHT - 40)
 
+        # Make the creature face where it actually moves.
+        move_dx = self.x - old_x
+        move_dy = self.y - old_y
+        move_dist = math.hypot(move_dx, move_dy)
+        if move_dist > 1e-4:
+            desired = math.atan2(move_dy, move_dx)
+            delta = (desired - self.facing_angle + math.pi) % math.tau - math.pi
+            turn = clamp(dt * 8.0, 0.0, 1.0)
+            self.facing_angle = (self.facing_angle + delta * turn) % math.tau
+
     def should_tick(self):
         if self.tick_timer <= 0:
             self.tick_timer += self.tick_interval
@@ -2261,15 +2318,87 @@ class UltimateFractalPrism:
         if self.time_left <= 0:
             return
         ratio = clamp(self.time_left / max(0.001, self.duration), 0.0, 1.0)
-        prism_r = 30 + int(6 * math.sin(pygame.time.get_ticks() * 0.006))
-        surf = pygame.Surface((prism_r * 2 + 60, prism_r * 2 + 60), pygame.SRCALPHA)
+        beast_r = self.visual_radius
+        surf = pygame.Surface((beast_r * 2 + 80, beast_r * 2 + 80), pygame.SRCALPHA)
         center = (surf.get_width() // 2, surf.get_height() // 2)
-        for spread, alpha in ((13, 28), (8, 50), (4, 84)):
-            pts = Enemy._regular_polygon(center, prism_r + spread, 3, self.spin + math.pi / 2)
-            pygame.draw.polygon(surf, (120, 215, 255, int(alpha + ratio * 14)), pts, 5 + spread // 2)
-        pts = Enemy._regular_polygon(center, prism_r, 3, self.spin + math.pi / 2)
-        pygame.draw.polygon(surf, (185, 245, 255, int(180 + 55 * ratio)), pts, 3)
-        pygame.draw.circle(surf, (255, 255, 255, int(170 + 65 * ratio)), center, 5)
+        cx, cy = center
+
+        facing = self.facing_angle
+        fx, fy = math.cos(facing), math.sin(facing)
+        px, py = -fy, fx
+
+        # Ether aura
+        for spread, alpha, width in ((18, 26, 10), (12, 44, 7), (6, 70, 4)):
+            rr = beast_r + spread
+            pygame.draw.circle(
+                surf,
+                (128, 205, 255, int(alpha + ratio * 18)),
+                center,
+                rr,
+                width,
+            )
+
+        # Prismatic beast body (crystalline manta-like silhouette)
+        nose = (cx + fx * beast_r * 1.35, cy + fy * beast_r * 1.35)
+        shoulder_l = (cx + fx * beast_r * 0.28 + px * beast_r * 0.98, cy + fy * beast_r * 0.28 + py * beast_r * 0.98)
+        shoulder_r = (cx + fx * beast_r * 0.28 - px * beast_r * 0.98, cy + fy * beast_r * 0.28 - py * beast_r * 0.98)
+        hip_l = (cx - fx * beast_r * 0.48 + px * beast_r * 0.72, cy - fy * beast_r * 0.48 + py * beast_r * 0.72)
+        hip_r = (cx - fx * beast_r * 0.48 - px * beast_r * 0.72, cy - fy * beast_r * 0.48 - py * beast_r * 0.72)
+        tail = (cx - fx * beast_r * 1.2, cy - fy * beast_r * 1.2)
+
+        body_pts = [
+            (int(nose[0]), int(nose[1])),
+            (int(shoulder_l[0]), int(shoulder_l[1])),
+            (int(hip_l[0]), int(hip_l[1])),
+            (int(tail[0]), int(tail[1])),
+            (int(hip_r[0]), int(hip_r[1])),
+            (int(shoulder_r[0]), int(shoulder_r[1])),
+        ]
+        pygame.draw.polygon(surf, (92, 200, 255, int(150 + 70 * ratio)), body_pts)
+        pygame.draw.polygon(surf, (220, 246, 255, int(190 + 55 * ratio)), body_pts, 2)
+
+        # Side blades ("pattes/ailes")
+        wing_len = beast_r * 1.05
+        wing_left_tip = (
+            shoulder_l[0] + px * wing_len + fx * beast_r * 0.22,
+            shoulder_l[1] + py * wing_len + fy * beast_r * 0.22,
+        )
+        wing_right_tip = (
+            shoulder_r[0] - px * wing_len + fx * beast_r * 0.22,
+            shoulder_r[1] - py * wing_len + fy * beast_r * 0.22,
+        )
+        left_wing = [
+            (int(shoulder_l[0]), int(shoulder_l[1])),
+            (int(wing_left_tip[0]), int(wing_left_tip[1])),
+            (int(hip_l[0]), int(hip_l[1])),
+        ]
+        right_wing = [
+            (int(shoulder_r[0]), int(shoulder_r[1])),
+            (int(wing_right_tip[0]), int(wing_right_tip[1])),
+            (int(hip_r[0]), int(hip_r[1])),
+        ]
+        pygame.draw.polygon(surf, (120, 220, 255, int(140 + 70 * ratio)), left_wing)
+        pygame.draw.polygon(surf, (120, 220, 255, int(140 + 70 * ratio)), right_wing)
+        pygame.draw.polygon(surf, (235, 250, 255, int(190 + 45 * ratio)), left_wing, 2)
+        pygame.draw.polygon(surf, (235, 250, 255, int(190 + 45 * ratio)), right_wing, 2)
+
+        # Face core ("oeil")
+        eye_x = cx + fx * beast_r * 0.28
+        eye_y = cy + fy * beast_r * 0.28
+        eye_r = max(4, int(beast_r * 0.18))
+        pygame.draw.circle(surf, (18, 35, 56, 210), (int(eye_x), int(eye_y)), eye_r + 4)
+        pygame.draw.circle(surf, (110, 228, 255, int(175 + 50 * ratio)), (int(eye_x), int(eye_y)), eye_r + 1)
+        pygame.draw.circle(surf, (255, 255, 255, 235), (int(eye_x), int(eye_y)), max(2, eye_r // 2))
+
+        # Spine glow
+        pygame.draw.line(
+            surf,
+            (180, 236, 255, int(140 + 60 * ratio)),
+            (int(nose[0]), int(nose[1])),
+            (int(tail[0]), int(tail[1])),
+            2,
+        )
+
         screen.blit(surf, (int(self.x - center[0]), int(self.y - center[1])))
 
         for link in self.links:
@@ -2308,25 +2437,74 @@ class UltimateSingularity:
         self.orbit_radius = orbit_radius
         self.orbit_speed = orbit_speed
         self.orbit_angle = start_angle
+        self.exiting = False
+        self.finished = False
+        self.exit_vx = 0.0
+        self.exit_vy = 0.0
+        self.exit_speed = 620.0
+        self.anchor_x = x
+        self.anchor_y = y
 
     def update(self, dt, anchor_pos=None):
-        self.time_left -= dt
-        self.tick_timer -= dt
-        if anchor_pos is not None:
-            self.orbit_angle = (self.orbit_angle + self.orbit_speed * dt) % math.tau
-            ax, ay = anchor_pos
-            self.x = ax + math.cos(self.orbit_angle) * self.orbit_radius
-            self.y = ay + math.sin(self.orbit_angle) * self.orbit_radius
-            self.x = clamp(self.x, 30, WIDTH - 30)
-            self.y = clamp(self.y, 30, HEIGHT - 30)
+        if self.finished:
+            return
+
+        if not self.exiting:
+            self.time_left -= dt
+            self.tick_timer -= dt
+            if anchor_pos is not None:
+                self.orbit_angle = (self.orbit_angle + self.orbit_speed * dt) % math.tau
+                ax, ay = anchor_pos
+                self.anchor_x, self.anchor_y = ax, ay
+                self.x = ax + math.cos(self.orbit_angle) * self.orbit_radius
+                self.y = ay + math.sin(self.orbit_angle) * self.orbit_radius
+                self.x = clamp(self.x, 30, WIDTH - 30)
+                self.y = clamp(self.y, 30, HEIGHT - 30)
+
+            if self.time_left <= 0:
+                self.time_left = 0.0
+                self.exiting = True
+                # Exit along orbit tangent, with slight outward push.
+                tan_x = -math.sin(self.orbit_angle)
+                tan_y = math.cos(self.orbit_angle)
+                dx = self.x - self.anchor_x
+                dy = self.y - self.anchor_y
+                dist = math.hypot(dx, dy) or 1.0
+                out_x = dx / dist
+                out_y = dy / dist
+                dir_x = tan_x * 0.82 + out_x * 0.36
+                dir_y = tan_y * 0.82 + out_y * 0.36
+                norm = math.hypot(dir_x, dir_y) or 1.0
+                dir_x /= norm
+                dir_y /= norm
+                self.exit_vx = dir_x * self.exit_speed
+                self.exit_vy = dir_y * self.exit_speed
+        else:
+            self.x += self.exit_vx * dt
+            self.y += self.exit_vy * dt
+            boost = 1.0 + dt * 0.9
+            self.exit_vx *= boost
+            self.exit_vy *= boost
+            margin = 280
+            if (
+                self.x < -margin
+                or self.x > WIDTH + margin
+                or self.y < -margin
+                or self.y > HEIGHT + margin
+            ):
+                self.finished = True
 
     def should_tick(self):
+        if self.exiting or self.finished:
+            return False
         if self.tick_timer <= 0:
             self.tick_timer += self.tick_interval
             return True
         return False
 
     def pull_entity(self, entity, dt, weight=1.0):
+        if self.exiting or self.finished:
+            return
         dx = self.x - entity.x
         dy = self.y - entity.y
         dist = math.hypot(dx, dy)
@@ -2338,38 +2516,106 @@ class UltimateSingularity:
         entity.y += (dy / dist) * force * dt
 
     def draw(self, screen):
-        if self.time_left <= 0:
+        if self.finished:
             return
-        ratio = clamp(self.time_left / self.duration, 0.0, 1.0)
-        t = 1.0 - ratio
-        pulse = 0.84 + 0.16 * math.sin(pygame.time.get_ticks() * 0.01 + t * math.tau * 2.2)
-        ring_r = int(self.radius * pulse)
-        core_r = int(self.core_radius * (1.0 + 0.22 * math.sin(pygame.time.get_ticks() * 0.016)))
-        size = ring_r * 2 + 70
+        now = pygame.time.get_ticks() * 0.001
+        visual_scale = 1.34
+        growth_t = 1.0 if self.exiting else clamp(1.0 - (self.time_left / self.duration), 0.0, 1.0)
+        growth_ease = growth_t * growth_t * (3.0 - 2.0 * growth_t)
+        growth_mult = (1.0 / 3.0) + (1.3 - (1.0 / 3.0)) * growth_ease
+
+        disk_rx = int(
+            self.radius
+            * visual_scale
+            * growth_mult
+            * (0.62 + 0.07 * math.sin(now * 0.9 + growth_t * 2.3))
+        )
+        disk_ry = max(26, int(disk_rx * (0.33 + 0.05 * math.sin(now * 1.4 + 0.8))))
+        core_r = int(
+            self.core_radius
+            * 1.38
+            * growth_mult
+            * (1.0 + 0.08 * math.sin(now * 4.2))
+        )
+        size = int(max(self.radius * 2 + 180, disk_rx * 2 + 280))
         surf = pygame.Surface((size, size), pygame.SRCALPHA)
         center = (size // 2, size // 2)
+        cx, cy = center
 
-        for r, alpha, width in (
-            (ring_r + 18, 26, 13),
-            (ring_r + 10, 46, 9),
-            (ring_r + 4, 72, 6),
-            (ring_r, 130, 3),
-        ):
-            pygame.draw.circle(surf, (85, 215, 255, int(alpha * ratio + 12)), center, r, width)
+        disk_cy = cy + int(self.radius * 0.02 * growth_mult)
 
-        disc_r = max(8, int(self.radius * (0.22 + 0.08 * t)))
-        pygame.draw.circle(surf, (20, 45, 68, int(170 * ratio + 30)), center, disc_r)
-        pygame.draw.circle(surf, (95, 225, 255, int(180 * ratio + 30)), center, disc_r, 2)
-        pygame.draw.circle(surf, (205, 245, 255, int(220 * ratio + 20)), center, core_r)
-        pygame.draw.circle(surf, (255, 255, 255, int(210 * ratio + 20)), center, max(2, core_r // 2))
+        # Accretion disk body (elliptical, layered glow).
+        for spread, alpha in ((44, 20), (32, 30), (22, 42), (12, 56), (4, 74)):
+            rx = disk_rx + spread
+            ry = disk_ry + int(spread * 0.36)
+            rect = pygame.Rect(cx - rx, disk_cy - ry, rx * 2, ry * 2)
+            color = (
+                95 + spread * 2,
+                65 + spread,
+                165 + min(80, spread * 3),
+                int(alpha + 10),
+            )
+            pygame.draw.ellipse(surf, color, rect, max(2, 10 - spread // 4))
 
-        for i in range(8):
-            ang = pygame.time.get_ticks() * 0.002 + i * (math.tau / 8)
-            sx = center[0] + math.cos(ang) * (disc_r + 6)
-            sy = center[1] + math.sin(ang) * (disc_r + 6)
-            ex = center[0] + math.cos(ang + 0.55) * (ring_r - 10)
-            ey = center[1] + math.sin(ang + 0.55) * (ring_r - 10)
-            pygame.draw.line(surf, (140, 235, 255, int(70 * ratio + 20)), (sx, sy), (ex, ey), 2)
+        # Swirling filaments to evoke orbital motion.
+        filament_count = 30
+        for i in range(filament_count):
+            frac = i / max(1, filament_count - 1)
+            rx = int(disk_rx * (0.52 + 0.45 * frac))
+            ry = max(5, int(disk_ry * (0.62 + 0.38 * frac)))
+            rect = pygame.Rect(cx - rx, disk_cy - ry, rx * 2, ry * 2)
+            start = now * (1.7 + 0.35 * frac) + i * 0.44
+            sweep = 0.85 + 0.55 * (0.5 + 0.5 * math.sin(now * 1.9 + i * 0.8))
+            color_a = (
+                int(170 + 60 * (1.0 - frac)),
+                int(85 + 55 * frac),
+                int(240 - 28 * frac),
+                int((120 - 44 * frac) + 24),
+            )
+            color_b = (
+                int(215 + 28 * (1.0 - frac)),
+                int(155 + 28 * frac),
+                255,
+                int((78 - 34 * frac) + 14),
+            )
+            width = max(1, int(4 - frac * 2.0))
+            pygame.draw.arc(surf, color_a, rect, start, start + sweep, width + 1)
+            pygame.draw.arc(surf, color_b, rect, start + math.pi, start + math.pi + sweep * 0.75, width)
+
+        # Photon ring close to the event horizon.
+        photon_rx = max(core_r + 11, int(disk_rx * 0.34))
+        photon_ry = max(7, int(photon_rx * 0.40))
+        for spread, alpha, width in ((7, 56, 6), (3, 105, 4), (0, 190, 2)):
+            rect = pygame.Rect(
+                cx - (photon_rx + spread),
+                disk_cy - (photon_ry + spread // 2),
+                (photon_rx + spread) * 2,
+                (photon_ry + spread // 2) * 2,
+            )
+            pygame.draw.ellipse(
+                surf,
+                (245, 195, 255, int(alpha + 12)),
+                rect,
+                width,
+            )
+
+        # Event horizon (dark center) with slight lensing rim.
+        pygame.draw.circle(surf, (14, 8, 22, 245), (cx, cy), core_r + 4)
+        pygame.draw.circle(surf, (0, 0, 0, 255), (cx, cy), core_r)
+        pygame.draw.circle(surf, (175, 120, 235, 171), (cx, cy), core_r + 2, 1)
+
+        # Bright lensing arc over the top side.
+        lens_rx = photon_rx + 18
+        lens_ry = photon_ry + 10
+        lens_rect = pygame.Rect(cx - lens_rx, disk_cy - lens_ry, lens_rx * 2, lens_ry * 2)
+        pygame.draw.arc(
+            surf,
+            (255, 240, 255, 205),
+            lens_rect,
+            math.pi * 1.08,
+            math.pi * 1.92,
+            3,
+        )
 
         screen.blit(surf, (int(self.x - center[0]), int(self.y - center[1])))
 
@@ -2475,6 +2721,7 @@ class ElectroElf:
         self.target_x = self.x
         self.target_y = self.y
         self.target = None
+        self.orbit_phase = random.uniform(0.0, math.tau)
         self.sprite = self.load_sprite()
         if self.sprite:
             self.radius = self.sprite.get_width() / 2
@@ -2497,6 +2744,7 @@ class ElectroElf:
         self.target_y = random.uniform(margin, HEIGHT - margin)
 
     def update(self, dt, targets):
+        retreating = False
         if self.target is None or self.target not in targets or self.target.hp <= 0:
             if targets:
                 self.target = min(
@@ -2507,8 +2755,25 @@ class ElectroElf:
                 self.target = None
 
         if self.target is not None:
-            self.target_x = self.target.x
-            self.target_y = self.target.y
+            target_dx = self.x - self.target.x
+            target_dy = self.y - self.target.y
+            target_dist = math.hypot(target_dx, target_dy)
+            keep_dist = max(120.0, self.target.radius + self.radius + 34.0)
+            orbit_angle = pygame.time.get_ticks() * 0.0018 + self.orbit_phase
+            desired_x = self.target.x + math.cos(orbit_angle) * keep_dist
+            desired_y = self.target.y + math.sin(orbit_angle) * keep_dist
+            if target_dist < keep_dist * 0.78:
+                retreating = True
+                if target_dist <= 0.1:
+                    away_x, away_y = vec_from_angle(self.orbit_phase)
+                else:
+                    away_x = target_dx / target_dist
+                    away_y = target_dy / target_dist
+                desired_x = self.target.x + away_x * keep_dist
+                desired_y = self.target.y + away_y * keep_dist
+            margin = self.radius + 20
+            self.target_x = clamp(desired_x, margin, WIDTH - margin)
+            self.target_y = clamp(desired_y, margin, HEIGHT - margin)
         else:
             if math.hypot(self.target_x - self.x, self.target_y - self.y) < 12:
                 self._pick_new_target()
@@ -2518,8 +2783,9 @@ class ElectroElf:
         dist = math.hypot(dx, dy)
         if dist <= 0.1:
             return
-        vx = dx / dist * self.speed
-        vy = dy / dist * self.speed
+        move_speed = self.speed * (1.35 if retreating else 1.0)
+        vx = dx / dist * move_speed
+        vy = dy / dist * move_speed
         self.x += vx * dt
         self.y += vy * dt
 
@@ -2686,7 +2952,7 @@ class Game:
         global WIDTH, HEIGHT
         pygame.init()
         pygame.display.set_caption("Tank Survivor")
-        self.screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.FULLSCREEN)
+        self.screen = pygame.display.set_mode((0, 0), pygame.NOFRAME)
         WIDTH, HEIGHT = self.screen.get_size()
         self.clock = pygame.time.Clock()
         self.font_path = os.path.join(DATA_DIR, "genshin.ttf")
@@ -3038,7 +3304,7 @@ class Game:
         if key == "fire_rate":
             return int(round((0.9 - self.player.fire_rate) / 0.02))
         if key == "bullets":
-            return max(0, int((self.player.bullets_per_shot - 1) / 2))
+            return max(0, int(self.player.bullets_per_shot - 1))
         if key == "fire_orb":
             return self.player.fire_orb_level
         if key == "laser_orb":
@@ -3055,7 +3321,8 @@ class Game:
         if key == "fire_rate":
             return int(round((0.9 - 0.08) / 0.02))
         if key == "bullets":
-            return 30
+            # bullets_per_shot starts at 1 and gains +1 per level, up to 10.
+            return 9
         if key == "fire_orb":
             return 14
         if key == "laser_orb":
@@ -3286,7 +3553,8 @@ class Game:
             self.player.fire_rate = max(0.08, self.player.fire_rate - 0.02)
             self.player.ultimate_cooldown_max = max(0.5, self.player.ultimate_cooldown_max - 0.1)
         elif key == "bullets":
-            self.player.bullets_per_shot = min(61, self.player.bullets_per_shot + 2)
+            # +1 bullet per level, useful up to the 10-shot cap.
+            self.player.bullets_per_shot = min(10, self.player.bullets_per_shot + 1)
         elif key == "fire_orb":
             if self.player.fire_ring or self.player.fire_orb_level >= 14:
                 return
@@ -3486,7 +3754,7 @@ class Game:
         self.state = "boss_death"
 
     def boss_attack_damage(self):
-        return 24 + self.wave * 2.4
+        return (24 + self.wave * 2.4) * 5
 
     def boss_contact_damage(self):
         return self.boss_attack_damage() * 0.45
@@ -4335,6 +4603,11 @@ class Game:
 
         for singularity in list(self.ultimate_singularities):
             singularity.update(dt, (self.player.x, self.player.y))
+            if singularity.finished:
+                self.ultimate_singularities.remove(singularity)
+                continue
+            if singularity.exiting:
+                continue
 
             for enemy in self.enemies:
                 singularity.pull_entity(enemy, dt, weight=1.0)
@@ -4359,25 +4632,7 @@ class Game:
                             damage *= center_bonus
                         self.damage_boss(damage)
 
-            if singularity.time_left <= 0:
-                collapse_damage = (
-                    self.player.damage * 5.0 + self.wave * 6.0
-                ) * self.ultimate_damage_scale(0.2, cap=7.0)
-                self.ultimate_pulses.append(
-                    UltimatePulse(
-                        singularity.x,
-                        singularity.y,
-                        singularity.explosion_radius,
-                        duration=0.32,
-                    )
-                )
-                for enemy in list(self.enemies):
-                    if distance((enemy.x, enemy.y), (singularity.x, singularity.y)) <= singularity.explosion_radius:
-                        self.damage_enemy(enemy, collapse_damage)
-                if self.boss is not None:
-                    if distance((self.boss.x, self.boss.y), (singularity.x, singularity.y)) <= singularity.explosion_radius:
-                        self.damage_boss(collapse_damage * 0.8)
-                self.ultimate_singularities.remove(singularity)
+            # End behavior handled by singularity.exiting -> singularity.finished.
 
         for blade in list(self.ultimate_prismatic_blades):
             blade.update(dt, (self.player.x, self.player.y))
@@ -4727,10 +4982,6 @@ class Game:
         wave_x = WIDTH / 2 - wave_w / 2
         wave_rect = pygame.Rect(wave_x, top_y, wave_w, wave_h)
         draw_panel(wave_rect)
-        wave_bar_w = wave_w - 40
-        wave_bar_h = 12
-        wave_bar_x = wave_rect.x + 20
-        wave_bar_y = wave_rect.y + 18
         if self.boss is not None and self.boss.max_hp > 0:
             wave_ratio = clamp(1.0 - (self.boss.hp / self.boss.max_hp), 0, 1)
             wave_label = "BOSS"
@@ -4743,14 +4994,17 @@ class Game:
             wave_ratio = 0.0
             wave_label = f"Vague {self.wave}"
             wave_fill = (120, 220, 255)
+        wave_label_w = 134
+        wave_bar_h = 12
+        wave_bar_x = wave_rect.x + wave_label_w
+        wave_bar_w = wave_rect.right - wave_bar_x - 14
+        wave_bar_y = wave_rect.y + (wave_h - wave_bar_h) / 2
+        wave_shadow = self.font.render(wave_label, True, (10, 14, 24))
+        wave_text = self.font.render(wave_label, True, wave_fill)
+        wave_label_y = wave_rect.y + wave_h / 2 - wave_text.get_height() / 2
+        self.screen.blit(wave_shadow, (wave_rect.x + 14 + 1, wave_label_y + 1))
+        self.screen.blit(wave_text, (wave_rect.x + 14, wave_label_y))
         draw_bar(wave_bar_x, wave_bar_y, wave_bar_w, wave_bar_h, wave_ratio, wave_fill)
-        draw_tag(
-            wave_label,
-            wave_rect.centerx,
-            wave_rect.y - 10,
-            color=wave_fill,
-            ready=self.boss is not None,
-        )
 
         # Score panel #
         score_w = 210
@@ -4831,9 +5085,18 @@ class Game:
         xp_rect = pygame.Rect(margin, HEIGHT - xp_h - 14, xp_w, xp_h)
         draw_panel(xp_rect)
         xp_ratio = clamp(self.player.xp / max(1, self.player.next_xp), 0, 1)
-        draw_bar(xp_rect.x + 12, xp_rect.y + 12, xp_w - 24, 10, xp_ratio, (120, 225, 255))
-        lvl_text = self.font.render(f"NIV {self.player.level}", True, text_main)
-        self.screen.blit(lvl_text, (xp_rect.right + 8, xp_rect.y + 6))
+        lvl_label = f"Niv : {self.player.level}"
+        lvl_shadow = self.font.render(lvl_label, True, (10, 14, 24))
+        lvl_text = self.font.render(lvl_label, True, (120, 220, 255))
+        lvl_slot_w = max(98, lvl_text.get_width() + 4)
+        xp_bar_x = xp_rect.x + 12
+        xp_bar_y = xp_rect.y + 12
+        xp_bar_w = xp_w - 24 - lvl_slot_w - 10
+        draw_bar(xp_bar_x, xp_bar_y, xp_bar_w, 10, xp_ratio, (120, 225, 255))
+        lvl_x = xp_bar_x + xp_bar_w + 10
+        lvl_y = xp_rect.y + xp_h / 2 - lvl_text.get_height() / 2
+        self.screen.blit(lvl_shadow, (lvl_x + 1, lvl_y + 1))
+        self.screen.blit(lvl_text, (lvl_x, lvl_y))
 
         # Ultimate panel (bottom-right)
         ult_w = 300
@@ -4842,18 +5105,25 @@ class Game:
         draw_panel(ult_rect)
         ult_ratio = clamp(self.player.ultimate_charge / max(1, self.player.ultimate_max), 0, 1)
         ult_color = (170, 240, 255) if ult_ratio >= 1 else (95, 145, 175)
-        draw_bar(ult_rect.x + 12, ult_rect.y + 12, ult_w - 24, 10, ult_ratio, ult_color)
-        draw_tag(
-            "ULT (A)",
-            ult_rect.centerx,
-            ult_rect.y - 24,
-            color=(170, 240, 255) if ult_ratio >= 1 else (106, 170, 205),
-            ready=ult_ratio >= 1 and self.player.ultimate_cooldown <= 0,
-        )
+        ult_label = "ULT (A)"
+        ult_label_x = ult_rect.x + 10
+        ult_label_color = (170, 240, 255) if ult_ratio >= 1 else (106, 170, 205)
+        ult_label_shadow = self.font.render(ult_label, True, (10, 14, 24))
+        ult_label_text = self.font.render(ult_label, True, ult_label_color)
+        ult_label_y = ult_rect.y + ult_h / 2 - ult_label_text.get_height() / 2
+        self.screen.blit(ult_label_shadow, (ult_label_x + 1, ult_label_y + 1))
+        self.screen.blit(ult_label_text, (ult_label_x, ult_label_y))
+        ult_label_w = 92
+        ult_bar_x = ult_rect.x + ult_label_w
+        ult_bar_w = ult_rect.right - ult_bar_x - 10
+        draw_bar(ult_bar_x, ult_rect.y + 12, ult_bar_w, 10, ult_ratio, ult_color)
         # Ultimate cooldown display
         if self.player.ultimate_cooldown > 0:
             cooldown_text = self.font.render(f"{self.player.ultimate_cooldown:.1f}", True, text_soft)
-            self.screen.blit(cooldown_text, (ult_rect.x + 12, ult_rect.y + 12))
+            self.screen.blit(
+                cooldown_text,
+                (ult_rect.right - cooldown_text.get_width() - 10, ult_rect.y + 12),
+            )
 
         # Shockwave panel (above ULT)
         shock_w = 240
@@ -4865,20 +5135,21 @@ class Game:
         shock_ratio = clamp(
             self.player.shockwave_timer / max(0.01, self.player.shockwave_cooldown), 0, 1
         )
+        shock_label = "ONDE (E)"
+        shock_label_x = shock_rect.x + 10
+        shock_label_shadow = self.font.render(shock_label, True, (10, 14, 24))
+        shock_label_text = self.font.render(shock_label, True, (120, 220, 255))
+        shock_label_y = shock_rect.y + shock_h / 2 - shock_label_text.get_height() / 2
+        self.screen.blit(shock_label_shadow, (shock_label_x + 1, shock_label_y + 1))
+        self.screen.blit(shock_label_text, (shock_label_x, shock_label_y))
+        shock_label_w = 102
         draw_bar(
-            shock_rect.x + 10,
+            shock_rect.x + shock_label_w,
             shock_rect.y + 10,
-            shock_w - 20,
+            shock_w - shock_label_w - 10,
             8,
             shock_ratio,
             (120, 220, 255),
-        )
-        draw_tag(
-            "ONDE (E)",
-            shock_rect.centerx,
-            shock_rect.y - 24,
-            color=(120, 220, 255),
-            ready=shock_ratio >= 1.0,
         )
 
     def draw_cheat_buttons(self):
@@ -4995,96 +5266,292 @@ class Game:
             pygame.draw.rect(preview, (10, 18, 34, 220), local_rect, border_radius=8)
             pygame.draw.rect(preview, (70, 130, 190, 170), local_rect, 1, border_radius=8)
             t = pygame.time.get_ticks() * 0.001
+            cx, cy = local_rect.center
+            span = min(img_rect.width, img_rect.height)
 
-            if class_choice.ultimate_key == "constellation_laser":
-                cx, cy = local_rect.center
-                base_r = min(img_rect.width, img_rect.height) * 0.44
-                stars = []
-                for i in range(6):
-                    ang = t * 0.75 + i * (math.tau / 6)
-                    rr = base_r * (0.78 + 0.18 * math.sin(t * 1.7 + i * 1.2))
-                    stars.append((cx + math.cos(ang) * rr, cy + math.sin(ang) * rr))
-                hub = (
-                    cx + math.cos(t * 1.3) * 10,
-                    cy + math.sin(t * 1.1 + 0.8) * 10,
+            # Subtle animated backdrop to make each demo feel alive.
+            grid_alpha = int(26 + 10 * (0.5 + 0.5 * math.sin(t * 1.8)))
+            for y in range(12, local_rect.height, 18):
+                pygame.draw.line(
+                    preview,
+                    (90, 170, 235, grid_alpha),
+                    (10, y),
+                    (local_rect.width - 10, y),
+                    1,
                 )
 
+            def draw_target_dot(x, y, r=4):
+                pygame.draw.circle(preview, (95, 215, 255, 90), (int(x), int(y)), r + 4)
+                pygame.draw.circle(preview, (195, 242, 255, 220), (int(x), int(y)), r)
+                pygame.draw.circle(preview, (255, 255, 255, 210), (int(x), int(y)), max(1, r // 2))
+
+            if class_choice.ultimate_key == "constellation_laser":
+                node_count = 6
+                base_r = span * 0.34
+                nodes = []
+                for i in range(node_count):
+                    ang = t * 0.85 + i * (math.tau / node_count)
+                    rr = base_r * (0.84 + 0.16 * math.sin(t * 1.9 + i * 0.8))
+                    nodes.append((cx + math.cos(ang) * rr, cy + math.sin(ang) * rr))
+
+                target_points = []
+                for i in range(4):
+                    ang = -t * 0.55 + i * (math.tau / 4) + 0.3
+                    rr = base_r * 0.62
+                    tx = cx + math.cos(ang) * rr
+                    ty = cy + math.sin(ang) * rr
+                    target_points.append((tx, ty))
+                    draw_target_dot(tx, ty, 3)
+
                 links = []
-                for i in range(len(stars)):
-                    links.append((stars[i], stars[(i + 2) % len(stars)]))
-                    links.append((hub, stars[i]))
+                for i in range(node_count):
+                    links.append((nodes[i], nodes[(i + 1) % node_count]))
+                    links.append((nodes[i], nodes[(i + 2) % node_count]))
 
+                # Node-target links to mimic the in-game target tracking feeling.
+                for tx, ty in target_points:
+                    nearest = sorted(nodes, key=lambda p: (p[0] - tx) ** 2 + (p[1] - ty) ** 2)[:2]
+                    for n in nearest:
+                        links.append((n, (tx, ty)))
+
+                beam_w = max(2, int(span * 0.028))
                 for a, b in links:
-                    pygame.draw.line(preview, (70, 200, 255, 55), a, b, 10)
-                    pygame.draw.line(preview, (95, 225, 255, 120), a, b, 5)
-                    pygame.draw.line(preview, (220, 248, 255, 220), a, b, 2)
+                    pygame.draw.line(preview, (70, 200, 255, 50), a, b, beam_w + 7)
+                    pygame.draw.line(preview, (95, 225, 255, 130), a, b, beam_w + 2)
+                    pygame.draw.line(preview, (230, 248, 255, 230), a, b, max(2, beam_w // 2))
 
-                for x, y in stars:
-                    r = 5 + int(1.8 * (0.5 + 0.5 * math.sin(t * 4.0 + x * 0.03)))
-                    pygame.draw.circle(preview, (120, 230, 255, 100), (int(x), int(y)), r + 5)
-                    pygame.draw.circle(preview, (175, 242, 255, 220), (int(x), int(y)), r)
-                pygame.draw.circle(preview, (190, 246, 255, 230), (int(hub[0]), int(hub[1])), 6)
-                pygame.draw.circle(preview, (255, 255, 255, 210), (int(hub[0]), int(hub[1])), 2)
+                for i, (x, y) in enumerate(nodes):
+                    twinkle = 0.5 + 0.5 * math.sin(t * 5.2 + i * 0.9)
+                    beacon_phase = t * (2.0 + i * 0.07)
+                    r = 4 + int(2.2 * twinkle)
+                    pygame.draw.circle(preview, (90, 220, 255, 75), (int(x), int(y)), r + 10)
+                    pygame.draw.circle(preview, (165, 236, 255, 52), (int(x), int(y)), r + 15, 2)
+                    outer = Enemy._regular_polygon((x, y), r + 8, 4, beacon_phase + math.pi / 4)
+                    inner = Enemy._regular_polygon((x, y), r + 4, 4, -beacon_phase * 1.2 + math.pi / 4)
+                    pygame.draw.polygon(preview, (110, 220, 255, 150), outer, 2)
+                    pygame.draw.polygon(preview, (215, 245, 255, 190), inner, 2)
+                    top = (int(x), int(y - (r + 5)))
+                    left = (int(x - max(3, r * 0.5)), int(y + max(3, r * 0.35)))
+                    right = (int(x + max(3, r * 0.5)), int(y + max(3, r * 0.35)))
+                    pygame.draw.polygon(preview, (14, 32, 55, 200), [top, right, left])
+                    pygame.draw.polygon(preview, (95, 195, 245, 185), [top, right, left], 1)
+                    pygame.draw.circle(preview, (180, 242, 255, 235), (int(x), int(y)), r)
+                    pygame.draw.circle(preview, (255, 255, 255, 220), (int(x), int(y)), max(2, r // 2))
+                    pygame.draw.line(
+                        preview,
+                        (205, 245, 255, 180),
+                        (int(x), int(y - r - 5)),
+                        (int(x), int(y + r + 3)),
+                        1,
+                    )
             elif class_choice.ultimate_key == "prismatic_blade":
-                cx, cy = local_rect.center
-                reach = min(img_rect.width, img_rect.height) * 0.42
+                total_len = span * 0.72
+                beam_w = max(14, int(span * 0.12))
+                inner_radius = span * 0.18
                 for i in range(3):
-                    ang = t * 2.4 + i * (math.tau / 3)
-                    sx = cx - math.cos(ang) * reach * 0.2
-                    sy = cy - math.sin(ang) * reach * 0.2
-                    ex = cx + math.cos(ang) * reach
-                    ey = cy + math.sin(ang) * reach
-                    pygame.draw.line(preview, (255, 90, 205, 65), (sx, sy), (ex, ey), 16)
-                    pygame.draw.line(preview, (155, 225, 255, 155), (sx, sy), (ex, ey), 8)
-                    pygame.draw.line(preview, (245, 250, 255, 225), (sx, sy), (ex, ey), 3)
+                    ang = t * 2.9 + i * (math.tau / 3) + 0.2 * math.sin(t * 2.4 + i)
+                    sx = cx + math.cos(ang) * inner_radius
+                    sy = cy + math.sin(ang) * inner_radius
+                    ex = sx + math.cos(ang) * total_len
+                    ey = sy + math.sin(ang) * total_len
+                    dx = ex - sx
+                    dy = ey - sy
+                    seg_len = math.hypot(dx, dy) or 1.0
+                    ux, uy = dx / seg_len, dy / seg_len
+                    px, py = -uy, ux
+
+                    pygame.draw.line(preview, (120, 55, 180, 115), (sx + px * beam_w * 0.7, sy + py * beam_w * 0.7), (sx + ux * total_len * 0.55, sy + uy * total_len * 0.55), max(6, int(beam_w * 0.38)))
+                    pygame.draw.line(preview, (220, 180, 255, 165), (sx + px * beam_w * 0.7, sy + py * beam_w * 0.7), (sx + ux * total_len * 0.55, sy + uy * total_len * 0.55), 2)
+                    pygame.draw.line(preview, (150, 222, 255, 125), (sx, sy), (ex, ey), max(5, int(beam_w * 0.34)))
+                    pygame.draw.line(preview, (250, 252, 255, 210), (sx, sy), (ex, ey), 2)
+
+                    tip_x = sx + ux * total_len
+                    tip_y = sy + uy * total_len
+                    mid_x = sx + ux * total_len * 0.72
+                    mid_y = sy + uy * total_len * 0.72
+                    near_tip_x = sx + ux * total_len * 0.92
+                    near_tip_y = sy + uy * total_len * 0.92
+                    blade_w = beam_w * 0.82
+                    blade_mid_w = blade_w * 0.76
+                    blade_near_tip_w = blade_w * 0.56
+                    blade_pts = [
+                        (int(sx + px * blade_w), int(sy + py * blade_w)),
+                        (int(mid_x + px * blade_mid_w), int(mid_y + py * blade_mid_w)),
+                        (int(near_tip_x + px * blade_near_tip_w), int(near_tip_y + py * blade_near_tip_w)),
+                        (int(tip_x), int(tip_y)),
+                        (int(near_tip_x - px * blade_near_tip_w), int(near_tip_y - py * blade_near_tip_w)),
+                        (int(mid_x - px * blade_mid_w), int(mid_y - py * blade_mid_w)),
+                        (int(sx - px * blade_w), int(sy - py * blade_w)),
+                    ]
+                    pygame.draw.polygon(preview, (105, 205, 255, 180), blade_pts)
+                    pygame.draw.polygon(preview, (228, 246, 255, 220), blade_pts, 2)
             elif class_choice.ultimate_key == "vector_overdrive":
-                cx, cy = local_rect.center
-                r = min(img_rect.width, img_rect.height) * 0.24
+                r = span * 0.23
                 pulse = 0.9 + 0.1 * math.sin(t * 7.5)
                 rr = int(r * pulse)
                 pygame.draw.circle(preview, (90, 220, 255, 50), (cx, cy), rr + 26, 10)
                 pygame.draw.circle(preview, (170, 244, 255, 165), (cx, cy), rr + 8, 3)
-                chain = [
-                    (cx - rr * 1.3, cy - rr * 0.8),
-                    (cx - rr * 0.3, cy + rr * 0.1),
-                    (cx + rr * 0.7, cy - rr * 0.35),
-                    (cx + rr * 1.25, cy + rr * 0.75),
-                ]
+                targets = []
+                for i in range(5):
+                    ang = t * 0.9 + i * (math.tau / 5)
+                    tx = cx + math.cos(ang) * rr * (1.2 + 0.1 * math.sin(t * 1.7 + i))
+                    ty = cy + math.sin(ang) * rr * (0.9 + 0.2 * math.cos(t * 1.3 + i))
+                    targets.append((tx, ty))
+                    draw_target_dot(tx, ty, 3)
+
+                chain = [(cx, cy)] + targets[:]
                 for i in range(len(chain) - 1):
-                    pygame.draw.line(preview, (110, 225, 255, 120), chain[i], chain[i + 1], 7)
-                    pygame.draw.line(preview, (255, 255, 255, 215), chain[i], chain[i + 1], 2)
+                    a = chain[i]
+                    b = chain[i + 1]
+                    pygame.draw.line(preview, (100, 220, 255, 70), a, b, 9)
+                    pygame.draw.line(preview, (170, 244, 255, 190), a, b, 4)
+                    pygame.draw.line(preview, (255, 255, 255, 230), a, b, 2)
             elif class_choice.ultimate_key == "spectral_swarm":
-                cx, cy = local_rect.center
-                orbit = min(img_rect.width, img_rect.height) * 0.28
+                hub_r = int(span * 0.28 + 6 * math.sin(t * 5.8))
+                pygame.draw.circle(preview, (155, 110, 255, 62), (cx, cy), hub_r + 10, 7)
+                pygame.draw.circle(preview, (215, 180, 255, 165), (cx, cy), hub_r, 2)
+                for i in range(6):
+                    ang = t * 3.0 + i * (math.tau / 6)
+                    px = cx + math.cos(ang) * (hub_r - 8)
+                    py = cy + math.sin(ang) * (hub_r - 8)
+                    pygame.draw.circle(preview, (238, 215, 255, 180), (int(px), int(py)), 3)
+
+                # Mini spectral shards (tail + bright tip), close to in-game visuals.
                 for i in range(10):
-                    ang = t * 2.1 + i * (math.tau / 10)
-                    rr = orbit * (0.75 + 0.2 * math.sin(t * 2.7 + i))
-                    x = cx + math.cos(ang) * rr
-                    y = cy + math.sin(ang) * rr
-                    pygame.draw.circle(preview, (185, 145, 255, 120), (int(x), int(y)), 8)
-                    pygame.draw.circle(preview, (245, 232, 255, 230), (int(x), int(y)), 3)
-                pygame.draw.circle(preview, (170, 120, 255, 120), (cx, cy), int(orbit * 0.55), 2)
+                    ang = t * 2.2 + i * (math.tau / 10)
+                    sx = cx + math.cos(ang) * (hub_r * 0.55)
+                    sy = cy + math.sin(ang) * (hub_r * 0.55)
+                    ex = sx + math.cos(ang + 0.2 * math.sin(t * 2.8 + i)) * 22
+                    ey = sy + math.sin(ang + 0.2 * math.sin(t * 2.8 + i)) * 22
+                    pygame.draw.line(preview, (190, 145, 255, 120), (sx, sy), (ex, ey), 5)
+                    pygame.draw.line(preview, (245, 228, 255, 220), (sx, sy), (ex, ey), 2)
+                    pygame.draw.circle(preview, (205, 165, 255, 190), (int(ex), int(ey)), 6)
+                    pygame.draw.circle(preview, (255, 245, 255, 240), (int(ex), int(ey)), 3)
             elif class_choice.ultimate_key == "fractal_prism":
-                cx, cy = local_rect.center
-                prism_r = min(img_rect.width, img_rect.height) * 0.2
-                pts = Enemy._regular_polygon((cx, cy), prism_r, 3, t * 1.2 + math.pi / 2)
-                for spread, alpha in ((10, 46), (5, 76), (0, 170)):
-                    draw_pts = Enemy._regular_polygon((cx, cy), prism_r + spread, 3, t * 1.2 + math.pi / 2)
-                    pygame.draw.polygon(preview, (120, 215, 255, alpha), draw_pts, max(2, 4 - spread // 6))
-                pygame.draw.polygon(preview, (220, 248, 255, 220), pts, 2)
-                for i in range(3):
-                    ang = t * 0.85 + i * (math.tau / 3)
-                    ex = cx + math.cos(ang) * prism_r * 2.2
-                    ey = cy + math.sin(ang) * prism_r * 2.2
-                    pygame.draw.line(preview, (120, 225, 255, 105), (cx, cy), (ex, ey), 7)
-                    pygame.draw.line(preview, (255, 255, 255, 210), (cx, cy), (ex, ey), 2)
+                beast_r = max(18, int(span * 0.17))
+                bx = cx + math.cos(t * 1.2) * span * 0.1
+                by = cy + math.sin(t * 0.9 + 0.6) * span * 0.07
+                vx = -math.sin(t * 1.2) * span * 0.12
+                vy = math.cos(t * 0.9 + 0.6) * span * 0.063
+                if abs(vx) < 1e-5 and abs(vy) < 1e-5:
+                    facing = 0.0
+                else:
+                    facing = math.atan2(vy, vx)
+                fx, fy = math.cos(facing), math.sin(facing)
+                nx, ny = -fy, fx
+
+                for spread, alpha, width in ((12, 26, 7), (8, 44, 5), (4, 70, 3)):
+                    rr = beast_r + spread
+                    pygame.draw.circle(
+                        preview,
+                        (128, 205, 255, int(alpha + 16)),
+                        (int(bx), int(by)),
+                        rr,
+                        width,
+                    )
+
+                nose = (bx + fx * beast_r * 1.35, by + fy * beast_r * 1.35)
+                shoulder_l = (bx + fx * beast_r * 0.28 + nx * beast_r * 0.98, by + fy * beast_r * 0.28 + ny * beast_r * 0.98)
+                shoulder_r = (bx + fx * beast_r * 0.28 - nx * beast_r * 0.98, by + fy * beast_r * 0.28 - ny * beast_r * 0.98)
+                hip_l = (bx - fx * beast_r * 0.48 + nx * beast_r * 0.72, by - fy * beast_r * 0.48 + ny * beast_r * 0.72)
+                hip_r = (bx - fx * beast_r * 0.48 - nx * beast_r * 0.72, by - fy * beast_r * 0.48 - ny * beast_r * 0.72)
+                tail = (bx - fx * beast_r * 1.2, by - fy * beast_r * 1.2)
+                body_pts = [
+                    (int(nose[0]), int(nose[1])),
+                    (int(shoulder_l[0]), int(shoulder_l[1])),
+                    (int(hip_l[0]), int(hip_l[1])),
+                    (int(tail[0]), int(tail[1])),
+                    (int(hip_r[0]), int(hip_r[1])),
+                    (int(shoulder_r[0]), int(shoulder_r[1])),
+                ]
+                pygame.draw.polygon(preview, (92, 200, 255, 190), body_pts)
+                pygame.draw.polygon(preview, (220, 246, 255, 220), body_pts, 2)
+                wing_len = beast_r * 1.05
+                wing_left_tip = (
+                    shoulder_l[0] + nx * wing_len + fx * beast_r * 0.22,
+                    shoulder_l[1] + ny * wing_len + fy * beast_r * 0.22,
+                )
+                wing_right_tip = (
+                    shoulder_r[0] - nx * wing_len + fx * beast_r * 0.22,
+                    shoulder_r[1] - ny * wing_len + fy * beast_r * 0.22,
+                )
+                left_wing = [
+                    (int(shoulder_l[0]), int(shoulder_l[1])),
+                    (int(wing_left_tip[0]), int(wing_left_tip[1])),
+                    (int(hip_l[0]), int(hip_l[1])),
+                ]
+                right_wing = [
+                    (int(shoulder_r[0]), int(shoulder_r[1])),
+                    (int(wing_right_tip[0]), int(wing_right_tip[1])),
+                    (int(hip_r[0]), int(hip_r[1])),
+                ]
+                pygame.draw.polygon(preview, (120, 220, 255, 180), left_wing)
+                pygame.draw.polygon(preview, (120, 220, 255, 180), right_wing)
+                pygame.draw.polygon(preview, (235, 250, 255, 215), left_wing, 2)
+                pygame.draw.polygon(preview, (235, 250, 255, 215), right_wing, 2)
+                eye_x = bx + fx * beast_r * 0.28
+                eye_y = by + fy * beast_r * 0.28
+                eye_r = max(3, int(beast_r * 0.18))
+                pygame.draw.circle(preview, (18, 35, 56, 210), (int(eye_x), int(eye_y)), eye_r + 3)
+                pygame.draw.circle(preview, (110, 228, 255, 225), (int(eye_x), int(eye_y)), eye_r)
+                pygame.draw.circle(preview, (255, 255, 255, 235), (int(eye_x), int(eye_y)), max(2, eye_r // 2))
+
+                # Tamer preview: only the summoned beast (no beam links).
             elif class_choice.ultimate_key == "singularity":
-                cx, cy = local_rect.center
-                ring = int(min(img_rect.width, img_rect.height) * (0.22 + 0.04 * math.sin(t * 3.4)))
-                pygame.draw.circle(preview, (88, 220, 255, 42), (cx, cy), ring + 26, 10)
-                pygame.draw.circle(preview, (120, 232, 255, 105), (cx, cy), ring + 10, 4)
-                pygame.draw.circle(preview, (15, 30, 45, 175), (cx, cy), ring)
-                pygame.draw.circle(preview, (180, 244, 255, 205), (cx, cy), max(2, ring // 3), 2)
+                growth_t = 0.5 + 0.5 * math.sin(t * 0.65 - math.pi / 2)
+                growth_ease = growth_t * growth_t * (3.0 - 2.0 * growth_t)
+                growth_mult = (1.0 / 3.0) + (1.3 - (1.0 / 3.0)) * growth_ease
+                preview_scale = 4.0
+
+                disk_rx = max(
+                    16,
+                    int(span * 0.22 * growth_mult * (0.95 + 0.05 * math.sin(t * 1.2)) * preview_scale),
+                )
+                disk_ry = max(7, int(disk_rx * 0.34))
+                core_r = max(4, int(span * 0.045 * growth_mult * preview_scale))
+                disk_cy = cy
+
+                for spread, alpha in ((14, 24), (10, 34), (6, 48), (2, 68)):
+                    rx = disk_rx + spread
+                    ry = disk_ry + int(spread * 0.38)
+                    rect = pygame.Rect(cx - rx, disk_cy - ry, rx * 2, ry * 2)
+                    col = (150 + spread * 3, 90 + spread * 2, 220 + min(25, spread * 2), alpha)
+                    pygame.draw.ellipse(preview, col, rect, max(1, 6 - spread // 3))
+
+                filament_count = 14
+                for i in range(filament_count):
+                    frac = i / max(1, filament_count - 1)
+                    rx = int(disk_rx * (0.56 + 0.4 * frac))
+                    ry = max(4, int(disk_ry * (0.6 + 0.4 * frac)))
+                    rect = pygame.Rect(cx - rx, disk_cy - ry, rx * 2, ry * 2)
+                    start = t * (1.6 + 0.3 * frac) + i * 0.45
+                    sweep = 0.9
+                    col = (205, 145, 255, int(110 - 45 * frac))
+                    pygame.draw.arc(preview, col, rect, start, start + sweep, 2)
+
+                photon_rx = max(core_r + 5, int(disk_rx * 0.36))
+                photon_ry = max(5, int(photon_rx * 0.40))
+                for spread, alpha, width in ((4, 70, 4), (2, 120, 3), (0, 180, 2)):
+                    rect = pygame.Rect(
+                        cx - (photon_rx + spread),
+                        disk_cy - (photon_ry + spread // 2),
+                        (photon_rx + spread) * 2,
+                        (photon_ry + spread // 2) * 2,
+                    )
+                    pygame.draw.ellipse(preview, (245, 195, 255, alpha), rect, width)
+
+                pygame.draw.circle(preview, (14, 8, 22, 240), (cx, cy), core_r + 3)
+                pygame.draw.circle(preview, (0, 0, 0, 255), (cx, cy), core_r)
+                pygame.draw.circle(preview, (175, 120, 235, 160), (cx, cy), core_r + 1, 1)
+                lens_rect = pygame.Rect(
+                    cx - (photon_rx + 10),
+                    disk_cy - (photon_ry + 6),
+                    (photon_rx + 10) * 2,
+                    (photon_ry + 6) * 2,
+                )
+                pygame.draw.arc(preview, (255, 240, 255, 185), lens_rect, math.pi * 1.08, math.pi * 1.92, 2)
+
+                # Singularity preview: black hole only (no 5-branch/star marks).
             else:
                 pulse = 0.5 + 0.5 * math.sin(t * 2.4)
                 r = int(min(img_rect.width, img_rect.height) * (0.22 + pulse * 0.05))
